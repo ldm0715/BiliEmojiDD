@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from biliemoji import Emoji
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -14,12 +15,12 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import (
     CardWidget,
     ComboBox,
-    InfoBar,
     InfoBarPosition,
     LineEdit,
     PasswordLineEdit,
     PrimaryPushButton,
     PushButton,
+    SpinBox,
     Theme,
     qconfig,
     setTheme,
@@ -27,6 +28,8 @@ from qfluentwidgets import (
 
 from app.common.config import APP_CONFIG_DIR, cfg
 from app.common.exception import show_bili_error
+from app.common.notify import notify_success, notify_warning
+from app.common.proxy import build_proxy, parse_proxy, proxy_env, split_proxy
 from app.common.signal_bus import signal_bus
 from app.components.task import run_task
 
@@ -92,21 +95,11 @@ class SettingPage(QWidget):
 
     def _on_save(self) -> None:
         cookie = self.cookieEdit.text().strip().strip('"\'')
-        directory = self.dirEdit.text().strip()
-        if not directory:
-            InfoBar.warning(
-                "下载目录为空",
-                "请选择下载目录",
-                parent=self,
-                position=InfoBarPosition.TOP_RIGHT,
-            )
-            return
         qconfig.set(cfg.cookie, cookie)
-        qconfig.set(cfg.download_dir, directory)
         signal_bus.configChanged.emit()
-        InfoBar.success(
+        notify_success(
             "已保存",
-            "Cookie 与下载目录已保存到本机配置",
+            "Cookie 已保存到本机配置",
             parent=self,
             position=InfoBarPosition.TOP_RIGHT,
         )
@@ -114,7 +107,7 @@ class SettingPage(QWidget):
     def _on_verify(self) -> None:
         cookie = self.cookieEdit.text().strip().strip('"\'')
         if not cookie:
-            InfoBar.warning(
+            notify_warning(
                 "未填写 Cookie",
                 "请先填写 Cookie 再验证",
                 parent=self,
@@ -125,7 +118,9 @@ class SettingPage(QWidget):
 
         # 以 biliemoji 2.0.0 实际 API 为准：all_packages() 会校验 cookie 并可能拉取全量
         def task():
-            return Emoji(cookie=cookie).all_packages()
+            return Emoji(
+                cookie=cookie, proxies=parse_proxy(cfg.proxy.value)
+            ).all_packages()
 
         run_task(
             task,
@@ -135,7 +130,7 @@ class SettingPage(QWidget):
         )
 
     def _on_verify_ok(self, packages) -> None:
-        InfoBar.success(
+        notify_success(
             "验证通过",
             f"表情包访问权限有效，共 {len(packages)} 个表情包",
             parent=self,
@@ -143,33 +138,112 @@ class SettingPage(QWidget):
             duration=5000,
         )
 
-    # ---- 下载目录 ----
+    # ---- 下载 ----
     def _build_download_card(self, layout: QVBoxLayout) -> None:
         card = CardWidget(self)
         v = QVBoxLayout(card)
         v.setSpacing(8)
 
-        title = QLabel("下载目录", card)
+        title = QLabel("下载", card)
         title.setStyleSheet("font-size: 15px; font-weight: 600;")
 
-        row = QHBoxLayout()
+        dir_row = QHBoxLayout()
+        dir_row.addWidget(QLabel("下载目录", card))
         self.dirEdit = LineEdit(card)
         self.dirEdit.setText(cfg.download_dir.value)
         self.browseBtn = PushButton("浏览…", card)
-        row.addWidget(self.dirEdit, 1)
-        row.addWidget(self.browseBtn)
+        dir_row.addWidget(self.dirEdit, 1)
+        dir_row.addWidget(self.browseBtn)
+
+        proxy_row = QHBoxLayout()
+        proxy_row.addWidget(QLabel("代理地址", card))
+        self.protoCombo = ComboBox(card)
+        self.protoCombo.addItem("HTTP", "http")
+        self.protoCombo.addItem("HTTPS", "https")
+        self.hostEdit = LineEdit(card)
+        self.hostEdit.setPlaceholderText("IP / 域名")
+        self.hostEdit.setFixedWidth(180)
+        self.portSpin = SpinBox(card)
+        self.portSpin.setRange(1, 65535)
+        proxy_row.addWidget(self.protoCombo)
+        proxy_row.addWidget(self.hostEdit)
+        proxy_row.addWidget(self.portSpin)
+        proxy_row.addStretch(1)
+
+        scheme, host, port = split_proxy(cfg.proxy.value)
+        idx = self.protoCombo.findData(scheme if scheme in ("http", "https") else "http")
+        self.protoCombo.setCurrentIndex(max(idx, 0))
+        self.hostEdit.setText(host)
+        self.portSpin.setValue(port if port > 0 else 7890)
+
+        thread_row = QHBoxLayout()
+        thread_row.addWidget(QLabel("下载线程数", card))
+        self.threadSpin = SpinBox(card)
+        self.threadSpin.setRange(1, 16)
+        self.threadSpin.setValue(cfg.max_workers.value)
+        thread_row.addWidget(self.threadSpin)
+        thread_row.addStretch(1)
+
+        self.downloadSaveBtn = PrimaryPushButton("保存下载设置", card)
+        hint = QLabel(
+            "代理仅支持 HTTP/HTTPS（socks 未安装 PySocks）；端口 1–65535，留空主机名表示不使用代理。",
+            card,
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray; font-size: 12px;")
+
         v.addWidget(title)
-        v.addLayout(row)
+        v.addLayout(dir_row)
+        v.addLayout(proxy_row)
+        v.addLayout(thread_row)
+        v.addWidget(self.downloadSaveBtn, 0, Qt.AlignmentFlag.AlignRight)
+        v.addWidget(hint)
 
         layout.addWidget(card)
 
         self.browseBtn.clicked.connect(self._on_browse)
+        self.downloadSaveBtn.clicked.connect(self._on_save_download)
 
     def _on_browse(self) -> None:
         start = self.dirEdit.text().strip() or str(Path.home())
         directory = QFileDialog.getExistingDirectory(self, "选择下载目录", start)
         if directory:
             self.dirEdit.setText(directory)
+
+    def _on_save_download(self) -> None:
+        directory = self.dirEdit.text().strip()
+        if not directory:
+            notify_warning(
+                "下载目录为空",
+                "请选择下载目录",
+                parent=self,
+                position=InfoBarPosition.TOP_RIGHT,
+            )
+            return
+        scheme = self.protoCombo.currentData() or "http"
+        host = self.hostEdit.text().strip()
+        if host and ("://" in host or " " in host):
+            notify_warning(
+                "无效主机名",
+                "主机名不能包含协议前缀或空格，请分别填写协议 / IP / 端口",
+                parent=self,
+                position=InfoBarPosition.TOP_RIGHT,
+                duration=6000,
+            )
+            return
+        port = self.portSpin.value()
+        proxy_text = build_proxy(scheme, host, port)  # 主机名为空 -> 不使用代理
+        qconfig.set(cfg.download_dir, directory)
+        qconfig.set(cfg.proxy, proxy_text)
+        qconfig.set(cfg.max_workers, self.threadSpin.value())
+        proxy_env.apply(proxy_text)
+        signal_bus.configChanged.emit()
+        notify_success(
+            "已保存",
+            "下载目录、代理与线程数已保存到本机配置",
+            parent=self,
+            position=InfoBarPosition.TOP_RIGHT,
+        )
 
     # ---- 主题 ----
     def _build_theme_card(self, layout: QVBoxLayout) -> None:

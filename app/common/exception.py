@@ -10,13 +10,15 @@ from biliemoji import (
     NotFoundError,
     ValidationError,
 )
-from qfluentwidgets import InfoBar, InfoBarPosition
+from qfluentwidgets import InfoBarPosition
+
+from app.common.notify import notify_error, notify_warning
 
 
 def show_bili_error(exc: Exception, parent=None) -> None:
     """把 worker 线程冒出的异常映射为中文 InfoBar 提示。"""
     if isinstance(exc, AuthRequired):
-        InfoBar.error(
+        notify_error(
             "需要登录",
             "Cookie 缺失或已过期，请在「设置」页填写 Cookie",
             parent=parent,
@@ -24,42 +26,42 @@ def show_bili_error(exc: Exception, parent=None) -> None:
             duration=6000,
         )
     elif isinstance(exc, DressNotFound):
-        InfoBar.warning(
+        notify_warning(
             "没有结果",
             "未找到相关收藏集",
             parent=parent,
             position=InfoBarPosition.TOP_RIGHT,
         )
     elif isinstance(exc, NotFoundError):
-        InfoBar.error(
+        notify_error(
             "未找到",
             str(exc) or "请求的对象不存在",
             parent=parent,
             position=InfoBarPosition.TOP_RIGHT,
         )
     elif isinstance(exc, NetworkError):
-        InfoBar.error(
+        notify_error(
             "网络错误",
             str(exc) or "网络请求失败，请检查网络后重试",
             parent=parent,
             position=InfoBarPosition.TOP_RIGHT,
         )
     elif isinstance(exc, DownloadError):
-        InfoBar.error(
+        notify_error(
             "下载失败",
             str(exc) or "文件下载失败",
             parent=parent,
             position=InfoBarPosition.TOP_RIGHT,
         )
     elif isinstance(exc, ValidationError):
-        InfoBar.warning(
+        notify_warning(
             "参数错误",
             str(exc) or "输入参数不合法",
             parent=parent,
             position=InfoBarPosition.TOP_RIGHT,
         )
     elif isinstance(exc, BiliError):
-        InfoBar.error(
+        notify_error(
             "B 站接口错误",
             str(exc) or type(exc).__name__,
             parent=parent,
@@ -68,7 +70,7 @@ def show_bili_error(exc: Exception, parent=None) -> None:
         )
     else:
         # 未知异常保留详情供排查，但 UI 不崩溃
-        InfoBar.error(
+        notify_error(
             type(exc).__name__,
             str(exc) or repr(exc),
             parent=parent,

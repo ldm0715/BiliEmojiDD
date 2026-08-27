@@ -29,6 +29,7 @@ class AppConfig(QConfig):
     )
     default_gif = ConfigItem("Download", "gif", True)
     max_workers = RangeConfigItem("Download", "maxWorkers", 8, RangeValidator(1, 16))
+    proxy = ConfigItem("Download", "proxy", "")
     theme = OptionsConfigItem(
         "Appearance",
         "theme",

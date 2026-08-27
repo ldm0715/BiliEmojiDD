@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import (
     CheckBox,
     ComboBox,
-    InfoBar,
     InfoBarPosition,
     PrimaryPushButton,
     ProgressBar,
@@ -27,6 +26,8 @@ from qfluentwidgets import (
 
 from app.common.config import cfg
 from app.common.exception import show_bili_error
+from app.common.notify import notify_warning
+from app.common.proxy import parse_proxy
 from app.common.signal_bus import signal_bus
 from app.components.download_runner import start_download
 from app.components.task import run_task
@@ -141,7 +142,7 @@ class DressPage(QWidget):
     def _on_search(self) -> None:
         keyword = self.kwEdit.text().strip()
         if not keyword:
-            InfoBar.warning(
+            notify_warning(
                 "请输入关键词",
                 "收藏集搜索需要关键词",
                 parent=self.searchPage,
@@ -152,9 +153,9 @@ class DressPage(QWidget):
         self.hintLabel.setText("搜索中…")
 
         def task():
-            return Dress(cookie=cfg.cookie.value).search_dress_typed(
-                _SEARCH_NUM, keyword=keyword
-            )
+            return Dress(
+                cookie=cfg.cookie.value, proxies=parse_proxy(cfg.proxy.value)
+            ).search_dress_typed(_SEARCH_NUM, keyword=keyword)
 
         run_task(
             task,
@@ -189,7 +190,7 @@ class DressPage(QWidget):
     def _on_card_clicked(self, card: DressCard) -> None:
         summary = card.summary
         if not summary.is_collection:
-            InfoBar.warning(
+            notify_warning(
                 "无收藏集详情",
                 "该装扮没有可下载的收藏集",
                 parent=self.searchPage,
@@ -208,9 +209,9 @@ class DressPage(QWidget):
         act_id, lottery_id, _ = self._detail
 
         def task():
-            return Dress(cookie=cfg.cookie.value).certain_lottery_typed(
-                act_id, lottery_id
-            )
+            return Dress(
+                cookie=cfg.cookie.value, proxies=parse_proxy(cfg.proxy.value)
+            ).certain_lottery_typed(act_id, lottery_id)
 
         run_task(
             task,
@@ -239,21 +240,27 @@ class DressPage(QWidget):
         mode = self.modeCombo.currentData()
         self.detailBtn.setEnabled(False)
 
-        def task():
-            return Dress(cookie=cfg.cookie.value).download_collection(
+        def task(on_progress=None):
+            return Dress(
+                cookie=cfg.cookie.value, proxies=parse_proxy(cfg.proxy.value)
+            ).download_collection(
                 act_id,
                 lottery_id,
                 Path(cfg.download_dir.value),
                 mode=mode,
                 max_workers=cfg.max_workers.value,
+                on_progress=on_progress,
             )
 
-        start_download(
+        started = start_download(
             task,
             self.detailBar,
             on_finished=lambda: self.detailBtn.setEnabled(True),
             parent=self.detailPage,
         )
+        if not started:
+            # 目录不可用：start_download 未启动任务、不会触发 finished，手动恢复
+            self.detailBtn.setEnabled(True)
 
     # ---- 封面缩略图回填 ----
     def _on_thumb(self, url: str, pixmap) -> None:

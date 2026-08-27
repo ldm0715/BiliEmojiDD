@@ -1,7 +1,7 @@
 """可复用组件：表情缩略图网格、表情包卡片网格、收藏集卡片。"""
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QRect, QSize, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -11,10 +11,12 @@ from PySide6.QtWidgets import (
     QListView,
     QListWidget,
     QListWidgetItem,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
-from qfluentwidgets import CardWidget, FlowLayout, SmoothScrollArea
+from qfluentwidgets import CardWidget, CheckBox, FlowLayout, SmoothScrollArea
+from qfluentwidgets.common.style_sheet import ThemeColor
 
 from app.common.signal_bus import signal_bus
 from app.components.thumb import thumb_manager
@@ -115,52 +117,207 @@ class EmojiGrid(SmoothScrollArea):
             card.set_pixmap(pixmap)
 
 
-class PackageGrid(QListWidget):
-    """表情包卡片网格：每个包一张卡，封面用第一张表情，点击进入包详情。
+class PackageCard(QWidget):
+    """表情包卡片：图片按钮 + 居中文字 + 右上角勾选框 + 选中背景。
 
-    只对可视区域的项目提交缩略图请求（懒加载）。
+    容器不设 Layout；图片用 QPushButton(setFlat=True) 以便点击整图触发勾选；
+    文字 QLabel 居中且宽度对齐图片；勾选框 setGeometry 钉在右上角 + raise_()；
+    toggled 信号同步整卡背景色（半透明主题色）。点击卡片：多选态切换勾选，非多选态发 clicked。
+    """
+
+    clicked = Signal(object)  # EmotePackage
+    toggled = Signal(object, bool)  # (pkg, checked)
+
+    _CELL = QSize(160, 160)
+    _IMG = QRect(0, 0, 160, 116)
+    _TXT = QRect(0, 118, 160, 40)
+    _CHECK_SIZE = 20
+
+    def __init__(self, pkg, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.pkg = pkg
+        self._selectable = False
+        self.setFixedSize(self._CELL)
+        # 普通 QWidget 需此属性才会绘制 stylesheet 的 background-color（选中背景）
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+
+        # 图片按钮：flat、透明，点击整图触发
+        self.imageBtn = QPushButton(self)
+        self.imageBtn.setGeometry(self._IMG)
+        self.imageBtn.setFlat(True)
+        self.imageBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.imageBtn.setStyleSheet(
+            "QPushButton { background: transparent; border: none; }"
+        )
+        self.imageBtn.clicked.connect(self._on_image_clicked)
+
+        # 文字：居中，宽度对齐图片
+        self.textLabel = QLabel(self)
+        self.textLabel.setGeometry(self._TXT)
+        self.textLabel.setWordWrap(True)
+        self.textLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.textLabel.setStyleSheet(
+            "color: gray; font-size: 12px; background: transparent; border: none;"
+        )
+        self.textLabel.setText(f"{pkg.text or ('#' + str(pkg.id))}\nID: {pkg.id}")
+        self.textLabel.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+        # 勾选框：右上角，置顶
+        self.checkBox = CheckBox(self)
+        self.checkBox.setFixedSize(self._CHECK_SIZE, self._CHECK_SIZE)
+        self.checkBox.setGeometry(
+            self._IMG.right() - self._CHECK_SIZE - 4,
+            self._IMG.top() + 4,
+            self._CHECK_SIZE,
+            self._CHECK_SIZE,
+        )
+        self.checkBox.raise_()  # 置于图片按钮/文字之上
+        self.checkBox.setVisible(False)
+        self.checkBox.toggled.connect(self._on_toggled)
+
+        self._accent = ThemeColor.PRIMARY.color()
+        self._apply_bg(False)
+
+    def set_selectable(self, selectable: bool) -> None:
+        self._selectable = bool(selectable)
+        self.checkBox.setVisible(self._selectable)
+        if not self._selectable:
+            self.checkBox.setChecked(False)
+        self._apply_bg(self.checkBox.isChecked())
+
+    def set_checked(self, checked: bool) -> None:
+        self.checkBox.setChecked(bool(checked))
+
+    def is_checked(self) -> bool:
+        return self.checkBox.isChecked()
+
+    def set_pixmap(self, pixmap) -> None:
+        if pixmap is not None and not pixmap.isNull():
+            scaled = pixmap.scaled(
+                self._IMG.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            self.imageBtn.setIcon(QIcon(scaled))
+            self.imageBtn.setIconSize(scaled.size())
+
+    def _on_image_clicked(self) -> None:
+        if self._selectable:
+            self.checkBox.setChecked(not self.checkBox.isChecked())
+        else:
+            self.clicked.emit(self.pkg)
+
+    def _on_toggled(self, checked: bool) -> None:
+        self._apply_bg(checked)
+        self.toggled.emit(self.pkg, checked)
+
+    def _apply_bg(self, checked: bool) -> None:
+        if self._selectable and checked:
+            a = self._accent
+            self.setStyleSheet(
+                f"background-color: rgba({a.red()}, {a.green()}, {a.blue()}, 70);"
+            )
+        else:
+            self.setStyleSheet("background-color: transparent;")
+
+    def mousePressEvent(self, event) -> None:
+        # 图片区由 imageBtn 处理；文字区点击同样切换
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self._selectable:
+                self.checkBox.setChecked(not self.checkBox.isChecked())
+            else:
+                self.clicked.emit(self.pkg)
+            return
+        super().mousePressEvent(event)
+
+
+class PackageGrid(QListWidget):
+    """表情包卡片网格：QListWidget + setItemWidget 挂载 PackageCard。
+
+    只对可视区域的项目请求缩略图（懒加载）。
+    多选态：卡片右上角勾选框 + 选中遮罩，点击切换勾选。
     """
 
     packageClicked = Signal(object)  # EmotePackage
+    selectionChanged = Signal()  # 勾选集合变化
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setViewMode(QListView.ViewMode.IconMode)
         self.setFlow(QListView.Flow.LeftToRight)
         self.setResizeMode(QListView.ResizeMode.Adjust)
-        self.setIconSize(_PACKAGE_ICON)
         self.setGridSize(_PACKAGE_CELL)
         self.setUniformItemSizes(True)
         self.setMovement(QListView.Movement.Static)
         self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self._selectable = False
+        self._updating = False
         self.setSpacing(8)
         self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self._requested: set[str] = set()
-        self._url_items: dict[str, list[QListWidgetItem]] = {}
-        self.itemClicked.connect(self._on_item_clicked)
+        self._url_cards: dict[str, list[PackageCard]] = {}
         signal_bus.thumbLoaded.connect(self._on_thumb_loaded)
+
+    def set_selectable(self, selectable: bool) -> None:
+        self._selectable = bool(selectable)
+        self._updating = True
+        for i in range(self.count()):
+            card = self.itemWidget(self.item(i))
+            if isinstance(card, PackageCard):
+                card.set_selectable(self._selectable)
+        self._updating = False
+        self.selectionChanged.emit()
 
     def set_packages(self, packages) -> None:
         """packages：EmotePackage 列表。"""
         self._requested.clear()
-        self._url_items.clear()
+        self._url_cards.clear()
         self.clear()
         for pkg in packages:
             url = _package_cover_url(pkg)
-            label = f"{pkg.text or ('#' + str(pkg.id))}\nID: {pkg.id}"
-            item = QListWidgetItem(QIcon(), label)
+            item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, url)
-            item.setData(Qt.ItemDataRole.UserRole + 1, pkg)
-            item.setSizeHint(_PACKAGE_CELL)
+            item.setSizeHint(PackageCard._CELL)
+            card = PackageCard(pkg, self)
+            card.set_selectable(self._selectable)
+            card.clicked.connect(self.packageClicked.emit)
+            card.toggled.connect(self._on_card_toggled)
             self.addItem(item)
+            self.setItemWidget(item, card)
             if url:
-                self._url_items.setdefault(url, []).append(item)
+                self._url_cards.setdefault(url, []).append(card)
         self._update_visible()
 
-    def _on_item_clicked(self, item: QListWidgetItem) -> None:
-        pkg = item.data(Qt.ItemDataRole.UserRole + 1)
-        if pkg is not None:
-            self.packageClicked.emit(pkg)
+    def _on_card_toggled(self, pkg, checked: bool) -> None:
+        if not self._updating:
+            self.selectionChanged.emit()
+
+    # ---- 多选勾选 API ----
+
+    def checked_packages(self) -> list:
+        pkgs = []
+        for i in range(self.count()):
+            card = self.itemWidget(self.item(i))
+            if isinstance(card, PackageCard) and card.is_checked():
+                pkgs.append(card.pkg)
+        return pkgs
+
+    def checked_count(self) -> int:
+        n = 0
+        for i in range(self.count()):
+            card = self.itemWidget(self.item(i))
+            if isinstance(card, PackageCard) and card.is_checked():
+                n += 1
+        return n
+
+    def set_all_checked(self, checked: bool) -> None:
+        self._updating = True
+        for i in range(self.count()):
+            card = self.itemWidget(self.item(i))
+            if isinstance(card, PackageCard):
+                card.set_checked(checked)
+        self._updating = False
+        self.selectionChanged.emit()
 
     def scrollContentsBy(self, dx: int, dy: int) -> None:
         super().scrollContentsBy(dx, dy)
@@ -182,8 +339,8 @@ class PackageGrid(QListWidget):
                 thumb_manager.request(url)
 
     def _on_thumb_loaded(self, url: str, pixmap) -> None:
-        for item in self._url_items.get(url, ()):
-            item.setIcon(QIcon(pixmap))
+        for card in self._url_cards.get(url, ()):
+            card.set_pixmap(pixmap)
 
 
 class DressCard(CardWidget):

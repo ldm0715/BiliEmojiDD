@@ -10,6 +10,7 @@ from qfluentwidgets import (
 )
 
 from app.components.task import task_manager
+from app.view.download_page import DownloadPage
 from app.view.dress_page import DressPage
 from app.view.emoji_page import EmojiPage
 from app.view.setting_page import SettingPage
@@ -20,6 +21,7 @@ class MainWindow(FluentWindow):
         super().__init__()
         self.emojiPage = EmojiPage(self)
         self.dressPage = DressPage(self)
+        self.downloadPage = DownloadPage(self)
         self.settingPage = SettingPage(self)
 
         self.initNavigation()
@@ -29,9 +31,11 @@ class MainWindow(FluentWindow):
         # FluentWindow.addSubInterface 要求页面 objectName 非空
         self.emojiPage.setObjectName("emojiPage")
         self.dressPage.setObjectName("dressPage")
+        self.downloadPage.setObjectName("downloadPage")
         self.settingPage.setObjectName("settingPage")
         self.addSubInterface(self.emojiPage, FluentIcon.EMOJI_TAB_SYMBOLS, "表情包")
         self.addSubInterface(self.dressPage, FluentIcon.ALBUM, "收藏集")
+        self.addSubInterface(self.downloadPage, FluentIcon.DOWNLOAD, "下载")
         self.addSubInterface(
             self.settingPage,
             FluentIcon.SETTING,

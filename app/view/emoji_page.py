@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from qfluentwidgets import (
-    InfoBar,
+    CheckBox,
     InfoBarPosition,
     Pivot,
     PrimaryPushButton,
@@ -27,7 +27,10 @@ from qfluentwidgets import (
 
 from app.common.config import cfg
 from app.common.exception import show_bili_error
+from app.common.notify import notify_info, notify_success, notify_warning
+from app.common.proxy import parse_proxy
 from app.components.cache import load_all_packages_cache, save_all_packages_cache
+from app.components.download_queue import download_queue
 from app.components.package_detail import PackageDetailView
 from app.components.page_bar import PageBar
 from app.components.task import run_task
@@ -64,7 +67,7 @@ class _IdQueryTab(QWidget):
     def _on_query(self) -> None:
         text = self.idEdit.text().strip()
         if not text.isdigit():
-            InfoBar.warning(
+            notify_warning(
                 "无效 ID",
                 "请输入数字形式的表情包 ID",
                 parent=self,
@@ -76,7 +79,9 @@ class _IdQueryTab(QWidget):
         self.detail.show_loading(text)
 
         def task():
-            return Emoji(cookie=cfg.cookie.value).certain_emoji_typed(pid)
+            return Emoji(
+                cookie=cfg.cookie.value, proxies=parse_proxy(cfg.proxy.value)
+            ).certain_emoji_typed(pid)
 
         run_task(
             task,
@@ -93,6 +98,7 @@ class _AllPackagesTab(QWidget):
         super().__init__(parent)
         self._all: tuple = ()
         self._filtered: list = []
+        self._multi = False
 
         self.stacked = QStackedWidget(self)
         self.listPage = QWidget(self)
@@ -114,7 +120,9 @@ class _AllPackagesTab(QWidget):
         self.backBtn.clicked.connect(
             lambda: self.stacked.setCurrentWidget(self.listPage)
         )
-
+        self.multiBtn.toggled.connect(self._set_multi)
+        self.addBtn.clicked.connect(self._add_to_queue)
+        self.grid.selectionChanged.connect(self._update_select_label)
     def _build_list_page(self) -> None:
         layout = QVBoxLayout(self.listPage)
         layout.setSpacing(12)
@@ -128,11 +136,23 @@ class _AllPackagesTab(QWidget):
         self.filterEdit.setEnabled(False)
         self.countLabel = QLabel("", self.listPage)
         self.countLabel.setStyleSheet("color: gray;")
+        self.multiBtn = CheckBox("多选", self.listPage)
         top_row.addWidget(self.fetchBtn)
         top_row.addWidget(self.refreshBtn)
+        top_row.addWidget(self.multiBtn)
         top_row.addWidget(self.filterEdit, 1)
         top_row.addWidget(self.countLabel)
         layout.addLayout(top_row)
+
+        select_row = QHBoxLayout()
+        self.selectLabel = QLabel("已选 0 个", self.listPage)
+        self.selectLabel.setStyleSheet("color: gray;")
+        self.addBtn = PrimaryPushButton("加入下载", self.listPage)
+        self.addBtn.setVisible(False)
+        select_row.addWidget(self.selectLabel)
+        select_row.addStretch(1)
+        select_row.addWidget(self.addBtn)
+        layout.addLayout(select_row)
 
         self.grid = PackageGrid(self.listPage)
         self.grid.packageClicked.connect(self._open_detail)
@@ -162,7 +182,9 @@ class _AllPackagesTab(QWidget):
         self.detail.show_loading(pkg.text or f"#{pkg.id}")
 
         def task():
-            return Emoji(cookie=cfg.cookie.value).certain_emoji_typed(pkg.id)
+            return Emoji(
+                cookie=cfg.cookie.value, proxies=parse_proxy(cfg.proxy.value)
+            ).certain_emoji_typed(pkg.id)
 
         run_task(
             task,
@@ -177,7 +199,7 @@ class _AllPackagesTab(QWidget):
         if cached:
             self._set_packages(cached)
             self.refreshBtn.setEnabled(True)
-            InfoBar.info(
+            notify_info(
                 "已使用本地缓存",
                 f"共 {len(cached)} 个表情包（24 小时内有效，可「强制刷新」重新拉取）",
                 parent=self,
@@ -192,7 +214,9 @@ class _AllPackagesTab(QWidget):
         self.refreshBtn.setEnabled(False)
 
         def task():
-            return Emoji(cookie=cookie).all_packages()
+            return Emoji(
+                cookie=cookie, proxies=parse_proxy(cfg.proxy.value)
+            ).all_packages()
 
         run_task(
             task,
@@ -233,6 +257,32 @@ class _AllPackagesTab(QWidget):
     def _show_page(self, page: int) -> None:
         start = (page - 1) * _PAGE_SIZE
         self.grid.set_packages(self._filtered[start : start + _PAGE_SIZE])
+
+    # ---- 多选加入下载队列 ----
+
+    def _set_multi(self, on: bool) -> None:
+        self._multi = bool(on)
+        self.grid.set_selectable(self._multi)
+        self.addBtn.setVisible(self._multi)
+        self._update_select_label()
+
+    def _update_select_label(self) -> None:
+        n = self.grid.checked_count()
+        self.selectLabel.setText(f"已选 {n} 个")
+        self.addBtn.setEnabled(n > 0)
+
+    def _add_to_queue(self) -> None:
+        pkgs = self.grid.checked_packages()
+        if not pkgs:
+            return
+        added = download_queue.add_many(pkgs)
+        self.multiBtn.setChecked(False)  # 触发 toggled(False) -> _set_multi(False)
+        notify_success(
+            "已加入下载队列",
+            f"已加入 {added} 个表情包，可前往「下载」页查看",
+            parent=self,
+            position=InfoBarPosition.TOP_RIGHT,
+        )
 
 
 class EmojiPage(QWidget):

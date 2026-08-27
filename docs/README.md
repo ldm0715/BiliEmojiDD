@@ -9,6 +9,7 @@ B 站表情包 / 收藏集（装扮）下载器 GUI：PySide6 + QFluentWidgets �
 | [usage.md](usage.md) | **使用指南**：安装运行、页面功能、Cookie 获取、缓存、常见问题 |
 | [architecture.md](architecture.md) | **架构设计**：技术栈、模块分层、线程模型、数据流、配置与缓存 |
 | [development.md](development.md) | **开发与维护**：环境准备、命令、代码约定、关键坑点、修改指南 |
+| [download_queue.md](download_queue.md) | **下载队列与下载设置**：新增功能说明、关键实现、踩坑记录 |
 
 ## 快速上手
 
