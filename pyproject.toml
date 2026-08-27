@@ -1,0 +1,21 @@
+[project]
+name = "bili-emoji-dd"
+version = "0.1.0"
+description = "B站表情包与收藏集下载器（PySide6 + QFluentWidgets + biliemoji）"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "biliemoji==2.0.0",
+    "PySide6==6.4.2",
+    "PySide6-Fluent-Widgets @ git+https://github.com/ldm0715/PyQt-Fluent-Widgets@PySide6",
+]
+
+[dependency-groups]
+dev = ["ruff"]
+
+[tool.uv]
+package = false
+
+[tool.ruff.lint.per-file-ignores]
+# Qt 类文件命名惯例（MainWindow 类与文件名同名）
+"app/MainWindow.py" = ["N999"]

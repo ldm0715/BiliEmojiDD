@@ -1,0 +1,38 @@
+# biliEmojiDD
+
+B 站表情包 / 收藏集（装扮）下载器 GUI，基于 PySide6 + QFluentWidgets，功能由
+[biliemoji](https://pypi.org/project/biliemoji/) 2.0.0 SDK 提供。
+
+## 功能
+
+- **表情包**
+  - 按包 ID 查询单个表情包，缩略图预览，下载（可开关 GIF 动图）
+  - 登录后拉取全部表情包，按关键词本地过滤
+- **收藏集（装扮）**
+  - 关键词搜索，封面 / 价格 / 收藏集标记展示
+  - 点击查看详情预览，选择「图片 / 视频 / 图片+视频」下载
+- **设置**：B 站 Cookie、下载目录、主题（浅色 / 深色 / 跟随系统）
+
+## 运行
+
+```bash
+uv sync
+uv run python main.py
+```
+
+## 文档
+
+- [使用指南](docs/usage.md) — 页面功能、Cookie 获取、缓存、常见问题
+- [架构设计](docs/architecture.md) — 技术栈、模块分层、线程模型
+- [开发与维护](docs/development.md) — 环境、命令、代码约定、坑点
+
+## Cookie
+
+部分功能（全部表情包、收藏集下载）需要登录。Cookie 在「设置」页填写，仅保存在本机
+`%APPDATA%/biliEmojiDD/config.json`，不会上传。建议使用 `SESSDATA=...; bili_jct=...` 格式。
+
+## 说明
+
+- 所有接口来自 B 站公开 API，可能随官方更新失效
+- 下载内容保存到 `下载目录/<表情包名>/` 或 `下载目录/<收藏集名>/`
+- 仅供学习交流，请勿滥用，后果自负
