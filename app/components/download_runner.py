@@ -16,7 +16,9 @@ from biliemoji import (
     DownloadResult,
     DownloadStatus,
     DownloadTask,
+    Dress,
     Emoji,
+    ValidationError,
 )
 from biliemoji.sanitize import sanitize_filename
 from qfluentwidgets import InfoBarPosition, PushButton
@@ -25,6 +27,8 @@ from app.common.config import cfg
 from app.common.exception import show_bili_error
 from app.common.notify import notify_error, notify_success, notify_warning
 from app.common.proxy import parse_proxy
+from app.components.download_queue import item_kind
+from app.components.dress_helpers import dlc_ids, is_collection
 from app.components.task import run_task
 
 logger = logging.getLogger("app.components.download_runner")
@@ -75,10 +79,10 @@ def start_download(
     progress_bar.show()
 
     def _on_progress(done: int, total: int, result: Any) -> None:
-        # 统一协议 (done, total, result)；result is None 表示准备阶段（读取包详情）
+        # 统一协议 (done, total, result)；result is None 表示准备阶段（读取详情）
         if result is None:
             if status_label is not None:
-                status_label.setText(f"正在读取表情包详情…（{done}/{total}）")
+                status_label.setText(f"正在读取内容详情…（{done}/{total}）")
                 status_label.show()
             return
         progress_bar.setRange(0, max(total, 1))  # 防除零
@@ -201,3 +205,129 @@ def download_package_batch(
     # 真实结果在前，取详情失败在后；空批次时 download_many 返回空结果
     all_results = result.results + tuple(meta_failures)
     return DownloadBatchResult(results=all_results, elapsed=result.elapsed)
+
+
+def download_collection_batch(
+    collections,
+    dest,
+    *,
+    mode: str = "both",
+    max_workers: int | None = None,
+    on_progress=None,
+) -> DownloadBatchResult:
+    """批量下载多个收藏集：单 Downloader + 单进度条 + 聚合结果。
+
+    - collections：DressCollectionSummary 列表。
+    - max_workers 传入时使用传入值，仅 None 时读 cfg.max_workers.value。
+    - 显式 proxies（读取 cfg.proxy），元数据请求与文件下载都走代理
+      （biliemoji 的 download_collection 不转发代理给内部 Downloader）。
+    - 每个收藏集先 certain_lottery_typed 取全量（准备阶段 on_progress(i, n, None)）；
+      单个失败（捕获 Exception）合成 FAILED 结果后继续，不中断整批。
+    - 目录 dest / sanitize_filename(收藏集名)；图片 {名}.png、视频 {名}.mp4。
+    """
+    max_workers = cfg.max_workers.value if max_workers is None else max_workers
+    proxies = parse_proxy(cfg.proxy.value)
+    dress = Dress(cookie=cfg.cookie.value, proxies=proxies)
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+
+    meta_failures: list[DownloadResult] = []
+    tasks: list[DownloadTask] = []
+    total = len(collections)
+    for i, summary in enumerate(collections, 1):
+        if on_progress is not None:
+            on_progress(i, total, None)  # 准备阶段标记：result=None
+        act_id, lottery_id = dlc_ids(summary)
+        if not is_collection(summary) or act_id is None or lottery_id is None:
+            meta_failures.append(
+                DownloadResult(
+                    url=f"收藏集 {summary.name or '-'}",
+                    target=dest / f"_fetch_failed_{i}",
+                    status=DownloadStatus.FAILED,
+                    error=ValidationError("该结果不是可下载收藏集"),
+                )
+            )
+            continue
+        try:
+            coll = dress.certain_lottery_typed(act_id, lottery_id)
+        except Exception as exc:  # noqa: BLE001 单个失败不中断整批
+            logger.warning("获取收藏集 %s 详情失败：%r", summary.name, exc)
+            meta_failures.append(
+                DownloadResult(
+                    url=f"收藏集 {summary.name or act_id}",
+                    target=dest / f"_fetch_failed_{i}",
+                    status=DownloadStatus.FAILED,
+                    error=exc,
+                )
+            )
+            continue
+
+        folder = dest / sanitize_filename(coll.name)
+        for item in coll.item_list:
+            name = sanitize_filename(item.card_name or "unknown")
+            if mode in ("image", "both") and item.card_img_download:
+                tasks.append(
+                    DownloadTask(
+                        url=item.card_img_download,
+                        target=folder / f"{name}.png",
+                        expected_ext=".png",
+                    )
+                )
+            if mode in ("video", "both"):
+                vid = item.video_list[0] if item.video_list else None
+                if vid:
+                    tasks.append(
+                        DownloadTask(
+                            url=vid,
+                            target=folder / f"{name}.mp4",
+                            expected_ext=".mp4",
+                        )
+                    )
+
+    downloader = Downloader(max_workers=max_workers, on_progress=on_progress, proxies=proxies)
+    result = downloader.download_many(tasks)
+    return DownloadBatchResult(
+        results=result.results + tuple(meta_failures), elapsed=result.elapsed
+    )
+
+
+def download_mixed_batch(
+    items,
+    dest,
+    *,
+    gif: bool | None = None,
+    mode: str = "both",
+    max_workers: int | None = None,
+    on_progress=None,
+) -> DownloadBatchResult:
+    """混合批量下载（下载队列页）：先表情包、后收藏集，顺序执行两个子批并合并结果。
+
+    进度条在两个子批间会重新定程（start_download 的 on_progress 会 setRange）。
+    """
+    packages = [it for it in items if item_kind(it) == "package"]
+    collections = [it for it in items if item_kind(it) == "collection"]
+    parts: list[DownloadBatchResult] = []
+    if packages:
+        parts.append(
+            download_package_batch(
+                [p.id for p in packages],
+                dest,
+                gif=gif,
+                max_workers=max_workers,
+                on_progress=on_progress,
+            )
+        )
+    if collections:
+        parts.append(
+            download_collection_batch(
+                collections,
+                dest,
+                mode=mode,
+                max_workers=max_workers,
+                on_progress=on_progress,
+            )
+        )
+    return DownloadBatchResult(
+        results=tuple(r for part in parts for r in part.results),
+        elapsed=sum(part.elapsed for part in parts),
+    )

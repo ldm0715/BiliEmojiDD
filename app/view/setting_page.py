@@ -158,8 +158,9 @@ class SettingPage(QWidget):
         proxy_row = QHBoxLayout()
         proxy_row.addWidget(QLabel("代理地址", card))
         self.protoCombo = ComboBox(card)
-        self.protoCombo.addItem("HTTP", "http")
-        self.protoCombo.addItem("HTTPS", "https")
+        # qfluentwidgets addItem(text, icon, userData)：第二位置参是 icon，userData 须用关键字
+        self.protoCombo.addItem("HTTP", userData="http")
+        self.protoCombo.addItem("HTTPS", userData="https")
         self.hostEdit = LineEdit(card)
         self.hostEdit.setPlaceholderText("IP / 域名")
         self.hostEdit.setFixedWidth(180)
@@ -257,9 +258,9 @@ class SettingPage(QWidget):
         row = QHBoxLayout()
         row.addWidget(QLabel("主题", card))
         self.themeCombo = ComboBox(card)
-        self.themeCombo.addItem("跟随系统", Theme.AUTO)
-        self.themeCombo.addItem("浅色", Theme.LIGHT)
-        self.themeCombo.addItem("深色", Theme.DARK)
+        self.themeCombo.addItem("跟随系统", userData=Theme.AUTO)
+        self.themeCombo.addItem("浅色", userData=Theme.LIGHT)
+        self.themeCombo.addItem("深色", userData=Theme.DARK)
         try:
             self.themeCombo.setCurrentIndex(_THEMES.index(cfg.theme.value))
         except ValueError:
