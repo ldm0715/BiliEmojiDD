@@ -83,7 +83,7 @@
 1. **QPushButton 缺 Expanding 撑不满**：垂直 size policy 默认 Fixed，stretch 无效，图片被压小（PackageCard 重构）。
 2. **PySide6 个别控件 `update` 签名被覆写**：全局强制重绘循环里 `widget.update()` 会 `TypeError`，逐个 `try/except`。
 3. **`NavigationToolButton` 构造只有 `(icon, parent)`**：传 5 参会 `TypeError`。
-4. **枚举名是 `CONTRACT` 不是 `CONTRACT`**：qfluentwidgets 拼写错误，用错名直接 `AttributeError`。
+4. **枚举名是 `CONSTRACT` 不是 `CONTRACT`**：qfluentwidgets 把 contrast 拼错了，用错名直接 `AttributeError`。
 5. **`QFluentWidgets.ThemeMode` 残留**：config.json 旧值覆盖应用主题导致反色，见「三.1」。
 6. **测试脚本时序**：`setTheme` 须放在 app 模块导入之后——`config` 导入会 `qconfig.load` 读配置文件里的 ThemeMode 覆盖已设主题。
 
@@ -93,3 +93,10 @@
 - `QT_QPA_PLATFORM=offscreen uv run python scripts/check_improvements.py`：主题切换重刷、双列几何（实际 item 坐标 + 滚动条 + 不溢出/不重叠）、长名防裁剪/防复选框遮挡、详情入队/已下载状态同步、过滤默认勾选、设置页按钮、侧栏宽度——ALL PASSED。
 - `QT_QPA_PLATFORM=offscreen uv run python scripts/check_grid_click.py`：网格点击索引接线——ALL PASSED。
 - 人工 `uv run python main.py`：深色观感、网格缩放填满、侧栏主题切换、详情三态（加入/已加入/已下载过）。
+
+## 六、后续修复
+
+本批次之后又修了一轮主题跟随 / 网格铺满 / 已下载徽标的问题，见 [theme_grid_fixes.md](theme_grid_fixes.md)。其中修正了本文两处结论：
+
+- 「三.1 暗色主题」里的全局调色板方案对**网格容器无效**——`FluentWindow` 给 `stackedWidget` 套了 QSS，整棵子树被 `QStyleSheetStyle` 接管并缓存 palette，`app.setPalette()` + `update()` 刷不动它；正解是把 `_CardGridBase` 换成组件库 `ListWidget`（自带 QSS 注册）。
+- 「三.2 网格响应式填充」的 `(vw - spacing*(n-1)) // n` 公式**多减了一份间距**——`QListView` 设了 `gridSize()` 后完全忽略 `spacing()`，每行会白白少用 `spacing*(n-1)` px。

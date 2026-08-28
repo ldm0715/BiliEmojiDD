@@ -31,6 +31,7 @@ uv run python main.py
 - [收藏集页 + 混合下载队列](docs/collection_page.md) — 收藏集页改造、类别判别、混合队列
 - [详情页图片查看器](docs/image_viewer.md) — 遮罩 lightbox、letterbox 方案、上游坑
 - [UI 改进](docs/ui_polish.md) — 暗色主题补全、网格响应式填充、下载双列 + 去阴影、侧栏主题切换
+- [主题跟随 + 网格铺满 + 已下载徽标](docs/theme_grid_fixes.md) — 主题切换三处失效、详情网格右侧空白、卡片徽标
 
 ## Cookie
 

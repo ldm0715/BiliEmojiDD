@@ -18,6 +18,8 @@ uv run python -c "import app.MainWindow"   # 导入自检（连带验证 biliemo
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_image_viewer.py   # 查看器：letterbox/翻页/关闭
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_grid_click.py     # 网格：点击 → 索引接线
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_improvements.py   # 改进批次：主题切换/双列几何/入队状态/侧栏
+QT_QPA_PLATFORM=offscreen uv run python scripts/check_theme_switch.py   # 主题：侧栏按钮/下拉图标/网格容器重刷
+QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py     # 各页面亮/暗截图到 screenshots/（人工比对用）
 ```
 
 无测试框架（未配置 pytest），也就没有「跑单个测试」的概念。GUI 逻辑靠 `scripts/` 下的屏幕外断言脚本验证，每个脚本自成一体、失败时 `exit 1`（见「验证」）。
@@ -35,6 +37,7 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/check_improvements.py   # 改进
 | `docs/collection_page.md` | 收藏集页改造 + 类别判别 + 混合队列 |
 | `docs/image_viewer.md` | 图片查看器：letterbox 方案 + qfluentwidgets 上游坑全清单 |
 | `docs/ui_polish.md` | UI 改进：暗色主题补全（全局调色板 + 主题化 Label）、网格响应式填充、下载双列 + 去阴影、侧栏主题切换 |
+| `docs/theme_grid_fixes.md` | 主题跟随 + 网格铺满 + 已下载徽标：主题切换三处失效根因、`QListView` gridSize 忽略 spacing、收藏集目录命名统一 |
 
 **新增功能时同步更新**：`docs/` 下新建一篇（结构参照 `download_queue.md`），并登记进 `docs/README.md` 导航表与根 `README.md` 文档列表。
 
@@ -47,7 +50,7 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/check_improvements.py   # 改进
 ## 架构
 
 - `main.py`：入口。**先建 `QApplication` 再导入 `MainWindow`**（保证控件/信号在主线程构造）；`setTheme(cfg.theme.value)` 应用主题；启动时 `proxy_env.remember()` + `apply(cfg.proxy.value)` 快照并应用代理环境变量。
-- `app/MainWindow.py`：`FluentWindow` **四页导航**（表情包/收藏集/下载/设置，设置在 BOTTOM）。侧栏展开宽度 `setExpandWidth(150)`；主题切换按钮（`NavigationToolButton`，插在设置之前）随主题换图标（亮色=CONTRACT、暗色=BRIGHTNESS），点击切换 `LIGHT/DARK` 并持久化 + `signal_bus.configChanged` 让设置页下拉同步。`closeEvent` 里：有运行中下载时弹确认（下载不支持安全中断，退出会残留 `.part`）；`task_manager.clear_pending()` 只清未开始任务。
+- `app/MainWindow.py`：`FluentWindow` **四页导航**（表情包/收藏集/下载/设置，设置在 BOTTOM）。侧栏展开宽度 `setExpandWidth(150)`；主题切换按钮（`NavigationPushButton`，插在设置之前，展开时显示「主题」文字）随主题换图标（亮色=`CONSTRACT`、暗色=`BRIGHTNESS`），点击切换 `LIGHT/DARK` 并持久化 + `signal_bus.configChanged` 让设置页下拉同步。**接线只走 `addWidget(onClick=...)`，不要再手动 connect `clicked`**（会双触发）。`closeEvent` 里：有运行中下载时弹确认（下载不支持安全中断，退出会残留 `.part`）；`task_manager.clear_pending()` 只清未开始任务。
 - `app/common/`：
   - `config.py`：`AppConfig(QConfig)` 单例 `cfg`，**持久化到 `%APPDATA%/biliEmojiDD/config.json`**（不写项目目录）。项：`cookie`、`download_dir`、`default_gif`、`max_workers`(1–16)、`proxy`、`theme`。`theme` 项必须带 `EnumSerializer(Theme)`（否则 JSON 序列化崩）。`qconfig.load` 后会同步 `qconfig.themeMode` 到 `cfg.theme.value`（否则配置文件里残留的 `QFluentWidgets.ThemeMode` 会覆盖应用主题导致反色）。
   - `signal_bus.py`：全局信号（缩略图、配置变更）。
@@ -58,9 +61,9 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/check_improvements.py   # 改进
 - `app/components/`：
   - `task.py`：**线程层核心**。`Task`(QRunnable) + `TaskManager`（持有引用，finished 自动释放）+ `run_task()`。信号对象在主线程构造（亲和主线程），worker 线程 emit 自动 QueuedConnection。`autoDelete(False)` 防 C++ 对象提前释放丢信号。全局线程池 max 4。
   - `thumb.py`：异步缩略图。worker 向**常驻 `signal_bus`** 发原始信号（`thumbRawLoaded`/`thumbRawFailed`），主线程转 `QPixmap` 写 `QPixmapCache` 再广播 `thumbLoaded`。emit 用 try/except 守卫（应用关闭时忽略）。
-  - `widgets.py`：`EmojiCard`/`EmojiGrid`（表情网格，**复用 `_CardGridBase`**，卡片可点 → `imageClicked(index)`）、`_CardGridBase`（QListWidget 网格基类：懒加载缩略图 + 多选 API + 动态单元格 + `itemClicked(item)` / `itemClickedAt(index, item)`，内含 `verticalScrollBar().rangeChanged → _layout_items()` 联动重排）、`PackageCard`+`PackageGrid`（表情包卡片/网格，响应式填满）、`DressCard`+`DressGrid`（收藏集竖版四列卡片）、`DetailCard`+`DressDetailGrid`（详情动态尺寸网格，卡片可点 → `imageClicked(index)`）、`QueueCard`+`QueueList`（下载队列，**宽屏两列窄屏单列**，封面随单元格自适应）。**所有卡片文字用主题化 `CaptionLabel`/`StrongBodyLabel`/`BodyLabel` + `setTextColor(light, dark)`，自动随主题切换**；选中背景用**类选择器**（如 `QueueCard { background-color: ... }`）限定自身，不级联子 label。
+  - `widgets.py`：`EmojiCard`/`EmojiGrid`（表情网格，**复用 `_CardGridBase`**，卡片可点 → `imageClicked(index)`）、`_CardGridBase`（**组件库 `ListWidget`** 网格基类，主题自动重刷：懒加载缩略图 + 多选 API + 动态单元格 + `itemClicked(item)` / `itemClickedAt(index, item)`，内含 `verticalScrollBar().rangeChanged → _layout_items()` 联动重排）、`PackageCard`+`PackageGrid`（表情包卡片/网格，响应式填满）、`DressCard`+`DressGrid`（收藏集竖版四列卡片）、`DetailCard`+`DressDetailGrid`（详情动态尺寸网格，卡片可点 → `imageClicked(index)`）、`QueueCard`+`QueueList`（下载队列，**宽屏两列窄屏单列**，封面随单元格自适应）。`PackageCard`/`DressCard` **右上角**挂 `InfoBadge.success('已下载')`、**勾选框移到左上角**（两者同时显示不打架）；`DressCard` 名称 `setWordWrap` 两行 + 整卡 `ToolTipFilter` 兜底完整名。**所有卡片文字用主题化 `CaptionLabel`/`StrongBodyLabel`/`BodyLabel` + `setTextColor(light, dark)`，自动随主题切换**；选中背景用**类选择器**（如 `QueueCard { background-color: ... }`）限定自身，不级联子 label。
   - `package_detail.py`（包详情视图，两个入口复用）、`page_bar.py`（自制数字分页）、`image_viewer.py`（遮罩图片查看器，见下节）、`download_runner.py`（`start_download` + `download_package_batch`/`download_collection_batch`/`download_mixed_batch`）、`download_queue.py`（下载队列单例）、`dress_helpers.py`（收藏集类别判别 + dlc id 读取）、`cache.py`（全部表情包缓存）。
-- `app/view/`：`emoji_page.py`（Pivot 双标签 + 多选工具栏）、`dress_page.py`（「仅看收藏集」**默认勾选** + `_last_summaries` 存原始结果、`toggled` 实时重过滤；详情 `_detail_summary` 显式字段）、`download_page.py`（下载队列页）、`setting_page.py`（主题下拉带图标 + 外部切换后 `configChanged` 同步）。
+- `app/view/`：`emoji_page.py`（Pivot 双标签 + 多选工具栏）、`dress_page.py`（「仅看收藏集」**默认勾选** + `_last_summaries` 存原始结果、`toggled` 实时重过滤；详情 `_detail_summary` 显式字段）、`download_page.py`（下载队列页）、`setting_page.py`（主题下拉带图标：`_sync_theme_icon` + `bind_theme`，外部切换后 `configChanged` 同步）。
 
 ## 图片查看器（`app/components/image_viewer.py`）
 
@@ -89,6 +92,10 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/check_improvements.py   # 改进
 - **`QPushButton` 垂直 size policy 默认 `Fixed`**：`QVBoxLayout` 里加 `stretch=1` 也拉不撑（海报被压成 12px 的坑，多余空间全给文字 label）；需撑满时 `setSizePolicy(Expanding, Expanding)`。
 - **卡片下标不要靠载荷身份反查**：`(name, url)` 这类内容相同的元组字面量会被 CPython 常量折叠成**同一个对象**（`items[1] is items[2]` 为真），`is` 反查会把两项判成同一下标。`_CardGridBase` 用建卡时的 `partial(self._emit_clicked, index)` 闭包发 `itemClickedAt(index, item)`。
 - **qfluentwidgets `ComboBox.addItem(text, icon, userData)`**：第二位置参数是 **icon** 不是 userData；要 `currentData()` 有值必须 `addItem('文本', userData=值)`（曾致下载模式 `mode.lower()` 崩、设置页代理/主题切换失效）。
+- **`ComboBox` 闭合态不显示选中项图标**：`ComboBoxBase.setCurrentIndex` 只 `setText` 从不 `setIcon`，`item.icon` 只在展开菜单时用。要显示得自己 `setIcon(combo.itemIcon(i))`（ComboBox 继承 QPushButton，`paintEvent` 会调 `QPushButton.paintEvent` 画出来）。补图标的时机有三处：建卡后、`currentIndexChanged`、以及 `blockSignals` 内的同步——首次 `addItem` 库会自动 `setCurrentIndex(0)`，之后设同一索引会提前 return 不发信号。`FluentIcon` 按取用瞬间的主题取黑/白 svg，主题切换后须重新 `setIcon`（用 `bind_theme` 绑定）。
+- **`NavigationInterface.addWidget(..., onClick=fn)` 已经会把 `fn` 连到 `widget.clicked`**（`NavigationPanel._registerWidget`）。再手动 `widget.clicked.connect(fn)` 就是连了两遍，一次点击跑两次——主题切换按钮曾因此「切了又切回」，看起来完全无效。
+- **裸 `QListWidget` / `QToolButton` 等原生控件拿不到主题**：qfluentwidgets 靠 `updateStyleSheet()` 重刷 **已注册进 `styleSheetManager`** 的控件，原生控件从没注册过，背景色只能靠 `QPalette`——而全库从不调 `QApplication.setPalette`。列表用组件库 `ListWidget`（构造里 `FluentStyleSheet.LIST_VIEW.apply(self)` 自动注册），按钮用 `TransparentPushButton` 等，别自己写 QSS 兜。
+- **`QListView` 设了 `setGridSize()` 后忽略 `setSpacing()`**：步进就是 `gridSize.width()`，spacing 只会把**首列**卡片右移一格（其余列不动），于是第一、二列之间没有间隙、其他列有。所以 `_CardGridBase` 直接 `setSpacing(0)`，所有 `_cell_size()` 一律按 `(vw - _CARD_GUTTER) // 列数` 均分铺满整行；换行判据是 `列数 * cellW > 视口宽 - 1`（闭区间），算宽必须留余量，否则最后一列被挤到下一行、右侧反而空出一整格。选中高亮用 `_SEL_INSET` 的 QSS `margin` 从卡片边缘内缩来分隔相邻卡片。**首列与次列之间仍然没有间隙**（`setItemWidget` 只右移首列，改不掉），已知未修复，见 `docs/theme_grid_fixes.md` 第四节。
 - **`FluentIcon` 枚举名是 `CONSTRACT` 不是 `CONTRACT`**（官方把 contrast 拼错成 constract），用错名直接 `AttributeError`。
 - **`NavigationToolButton` 构造只有 `(icon, parent)`**（不像 `NavigationPushButton` 的 `(icon, text, isSelectable, parent)`）。
 - **主题化 Label**：文字优先用 `CaptionLabel`/`BodyLabel`/`StrongBodyLabel` + `setTextColor(light, dark)`，它们连 `qconfig.themeChanged` 自动切色；**不要**再给它们 `setStyleSheet` 设颜色（会覆盖主题色）。纯 QWidget 的背景/默认文字色依赖全局 palette（`theme.py` 已按主题应用）。
@@ -97,11 +104,11 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/check_improvements.py   # 改进
 ## 下载队列与下载设置（要点）
 
 - **队列**：`download_queue`（`app/components/download_queue.py`）内存单例，**混合表情包 + 收藏集**，按 `item_key(item)`（`("pkg", id)` / `("coll", raw["item_id"])`）去重，`item_kind` 判类型；`changed` 信号驱动 `DownloadPage` 重建。**仅本次会话**，重启清空。
-- **队列布局**：`QueueList._cell_size()` 响应式——`vw >= 2*min_w+spacing` 时两列 `(vw-spacing)//2`，否则单列 `vw-spacing`；配合 `_CardGridBase` 的 `rangeChanged` 联动在滚动条收窄视口后重排。`QueueCard` 封面随单元格自适应（`max(72, min(h-16, round(w*0.28)))`，值未变不动防递归）；名称 `setWordWrap(True)` 防截断；信息区右留 24px 防文字跑进勾选框。
-- **详情页入队 / 已下载状态**：收藏集与表情包详情页都有「加入下载」按钮，状态走单一 `_sync_queue_btn`——每次打开详情重置「加入下载」禁用、`_show_detail`/`set_package` 后同步（已在队列 → 「已加入」禁用）、`download_queue.changed` 联动（移除/清空后恢复）、加入后自动「已加入」禁用；`_go_back` 清 `_detail_summary`。「已下载过」= `downloaded_exists(package_download_dir(...))`（目录存在且非空），目录命名与批量下载完全一致（`download_runner` 的 `package_download_dir` / `collection_download_dir` / `downloaded_exists`）。
-- **批量下载**：`download_runner.download_package_batch(ids, dest, *, gif=None, max_workers=None, on_progress=None)`（表情包）与 `download_collection_batch(collections, dest, *, mode='both', max_workers=None, on_progress=None)`（收藏集，目录 `dest/收藏集名`）同构；下载页 `download_mixed_batch` 按 `item_kind` 拆分、顺序执行两子批并合并 `DownloadBatchResult`。`max_workers` 传入值优先、None 才读 `cfg.max_workers.value`；逐项 `certain_*_typed`（**单个失败 `except Exception` 合成 FAILED 结果后继续**，不中断整批）；**一个 `Downloader` + 一个总进度条**；表情包目录 `包名[:60] [包ID]` 防同名覆盖、文件名截断。
+- **队列布局**：`QueueList._cell_size()` 响应式——`vw >= 2*min_w` 时两列 `(vw-_CARD_GUTTER)//2`，否则单列 `vw-_CARD_GUTTER`；配合 `_CardGridBase` 的 `rangeChanged` 联动在滚动条收窄视口后重排。`QueueCard` 封面随单元格自适应（`max(72, min(h-16, round(w*0.28)))`，值未变不动防递归）；名称 `setWordWrap(True)` 防截断；信息区右留 24px 防文字跑进勾选框。
+- **详情页入队 / 已下载状态**：收藏集与表情包详情页都有「加入下载」按钮，状态走单一 `_sync_queue_btn`——每次打开详情重置「加入下载」禁用、`_show_detail`/`set_package` 后同步（已在队列 → 「已加入」禁用）、`download_queue.changed` 联动（移除/清空后恢复）、加入后自动「已加入」禁用；`_go_back` 清 `_detail_summary`。「已下载过」= `downloaded_exists(package_download_dir(...))`（目录存在且非空），目录命名与批量下载完全一致（`download_runner` 的 `package_download_dir` / `collection_download_dir` / `downloaded_exists`）。**收藏集目录一律按 `summary.name` 命名**（`collection_download_dir(summary)`）——搜索结果卡片手上只有 summary，若按 `certain_lottery_typed` 取回的 `coll.name` 命名，卡片徽标永远判不出已下载；所以收藏集详情页的单个下载也走 `download_collection_batch([summary], ...)` 而不是 `Dress.download_collection`（顺带拿到显式 proxies），`_refresh_downloaded` 同时认 summary 名与 coll 名两个目录以兼容改名前下载的旧数据。
+- **批量下载**：`download_runner.download_package_batch(ids, dest, *, gif=None, max_workers=None, on_progress=None)`（表情包）与 `download_collection_batch(collections, dest, *, mode='both', max_workers=None, on_progress=None)`（收藏集，目录 `collection_download_dir(summary)`，即按搜索结果名）同构；下载页 `download_mixed_batch` 按 `item_kind` 拆分、顺序执行两子批并合并 `DownloadBatchResult`。`max_workers` 传入值优先、None 才读 `cfg.max_workers.value`；逐项 `certain_*_typed`（**单个失败 `except Exception` 合成 FAILED 结果后继续**，不中断整批）；**一个 `Downloader` + 一个总进度条**；表情包目录 `包名[:60] [包ID]` 防同名覆盖、文件名截断。
 - **`start_download` 返回 False** 表示下载目录不可用（未建任务、无 finished 信号）——调用点必须自行恢复按钮状态，否则按钮永久禁用。
-- **卡片多选**（`PackageCard`/`DressCard`/`QueueCard` 同套路）：容器无 Layout（或外层布局 + 绝对定位勾选框）；图片是 `QPushButton(setFlat=True)`（点击整图切换勾选）；勾选框 `CheckBox` 用 `setGeometry` 钉在图片/卡片右上角 + `raise_()`；选中背景通过 `toggled` 同步整卡样式表背景，**必须 `setAttribute(WA_StyledBackground)`**（普通 QWidget 默认不绘制 stylesheet 背景），且样式表必须用**类选择器**（`"QueueCard { background-color: ... }"`）限定自身——无选择器的通用规则会级联到子 label 造成文字区整块上色。`DressCard` 是纯 QWidget（**不用 `CardWidget`**：其基类 `mouseReleaseEvent` 只发 0 参数 `clicked`，与 `Signal(object)` 冲突 → 点击死）。多选/懒加载逻辑统一在 `_CardGridBase`，卡片只需暴露 `.item` / `set_selectable` / `set_checked` / `is_checked` / `set_pixmap` / `set_cell` / `clicked` / `toggled`（`EmojiCard` 为表情展示，多选相关给占位实现）。
+- **卡片多选**（`PackageCard`/`DressCard`/`QueueCard` 同套路）：容器无 Layout（或外层布局 + 绝对定位勾选框）；图片是 `QPushButton(setFlat=True)`（点击整图切换勾选）；勾选框 `CheckBox` 用 `setGeometry` 钉在图片/卡片**左上角** + `raise_()`（右上角留给 `InfoBadge`「已下载」，两者同时显示）；选中背景通过 `toggled` 同步整卡样式表背景，**必须 `setAttribute(WA_StyledBackground)`**（普通 QWidget 默认不绘制 stylesheet 背景），且样式表必须用**类选择器**（`"QueueCard { background-color: ... }"`）限定自身——无选择器的通用规则会级联到子 label 造成文字区整块上色。`DressCard` 是纯 QWidget（**不用 `CardWidget`**：其基类 `mouseReleaseEvent` 只发 0 参数 `clicked`，与 `Signal(object)` 冲突 → 点击死）。多选/懒加载逻辑统一在 `_CardGridBase`，卡片只需暴露 `.item` / `set_selectable` / `set_checked` / `is_checked` / `set_pixmap` / `set_cell` / `clicked` / `toggled`（`EmojiCard` 为表情展示，多选相关给占位实现）。
 - **代理**：所有 `Emoji/Dress/Downloader` 显式传 `proxies=`（requests 显式值优先于环境变量）。biliemoji 的 typed 下载方法不转发 proxies 给内部 Downloader → 用环境变量 `HTTP(S)_PROXY` 兜底。**Windows 上 `os.environ` 大小写不敏感**：`ProxyEnvManager` 只管理大写键（POSIX 才双写），清空设置时恢复快照原值而非删除。
 - **消息提示**：用 `app/common/notify.py` 的 `notify_*`，**不要直接调 `InfoBar.*`**。InfoBar 内容**不要开 `wordWrap`**（会让 QLabel 最小宽度塌缩、内容压成极窄一列），垂直布局 + `TextWrap` 预换行即可。
 
@@ -120,7 +127,7 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/check_improvements.py   # 改进
 ## 验证
 
 - 启动：`uv run python main.py`（弹窗，需人工查看）。
-- **屏幕外脚本**（`QT_QPA_PLATFORM=offscreen`）：`scripts/` 下已有三个可直接跑的断言脚本（命令见「常用命令」）。新写脚本的套路：构建页面 + 注入假数据（假 `EmotePackage` / 预置 `QPixmapCache.insert(url, pm)` 绕开网络）+ 断言几何/信号/像素，失败 `sys.exit(1)`。
+- **屏幕外脚本**（`QT_QPA_PLATFORM=offscreen`）：`scripts/` 下已有四个可直接跑的断言脚本（命令见「常用命令」）。新写脚本的套路：构建页面 + 注入假数据（假 `EmotePackage` / 预置 `QPixmapCache.insert(url, pm)` 绕开网络）+ 断言几何/信号/像素，失败 `sys.exit(1)`。
   - 涉及后台任务时**必须轮询等任务完成再退出**（见线程规则），不要 `processEvents()` 后立刻结束。
   - 脚本从 `scripts/` 运行，开头需 `sys.path.insert(0, 项目根)` 才 import 得到 `app`。
   - 弹窗类组件用 `show()` 而非 `exec()`（offscreen 下 `exec()` 会阻塞脚本）。
