@@ -22,7 +22,7 @@ from qfluentwidgets import Theme, setTheme
 # 注意：必须等 app 模块导入完成后再 setTheme——config 导入会 qconfig.load 读取
 # 配置文件里的 QFluentWidgets.ThemeMode（可能残留旧值），覆盖之前设置的主题
 from app.common.theme import color_secondary
-from app.components.download_queue import download_queue
+from app.components.download_queue import download_queue, item_key
 from app.components.widgets import DressCard, QueueCard, QueueList
 
 setTheme(Theme.LIGHT)
@@ -205,7 +205,7 @@ check(
     page.queueBtn.text() == "已加入" and not page.queueBtn.isEnabled(),
     "已在队列再进详情：按钮「已加入」禁用",
 )
-download_queue.remove([("coll", "999")])
+download_queue.remove([item_key(summary2)])
 check(
     page.queueBtn.text() == "加入下载" and page.queueBtn.isEnabled(),
     "队列移除后按钮恢复「加入下载」可用",

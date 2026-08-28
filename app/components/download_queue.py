@@ -5,6 +5,8 @@ from collections.abc import Iterable
 
 from PySide6.QtCore import QObject, Signal
 
+from app.components.dress_helpers import dlc_ids
+
 
 def item_kind(item) -> str:
     """'package'（表情包）或 'collection'（收藏集）。
@@ -14,20 +16,34 @@ def item_kind(item) -> str:
     return "package" if getattr(item, "emote", None) is not None else "collection"
 
 
-def item_key(item) -> tuple[str, int | str]:
-    """去重键。表情包 ("pkg", id)；收藏集 ("coll", raw['item_id'])。
+def item_key(item) -> tuple[str, object]:
+    """去重键。表情包 ("pkg", id)；收藏集 ("coll", "dlc:<act>:<lottery>")。
 
-    注意：summary.id 因 biliemoji 解析 bug 恒为 None，收藏集只能取 raw。
+    收藏集**不能只用 item_id**：搜索结果里 `item_id == properties.dlc_act_id`，
+    而一个 dlc 活动下有多期 lottery（如「2233的MBTI-能量之源」act=112667 lot=112709
+    与「2233的MBTI-ENFP」act=112667 lot=113521），每期都是独立的可下载收藏集。
+    按 item_id 去重会把同活动的不同期判成同一项——多选加入时被悄悄丢掉，进详情页
+    却因为 contains() 命中而显示「已加入」。act + lottery 才是唯一键，也正是
+    certain_lottery_typed / 下载用的那一对 id。
+
+    非收藏集的装扮（type='ip'，无 dlc id）退回 item_id / id / 名称，各自带前缀
+    防跨方案撞车。summary.id 因 biliemoji 解析 bug 恒为 None，只能读 raw。
     """
     if item_kind(item) == "package":
         return ("pkg", item.id)
+    act_id, lottery_id = dlc_ids(item)
+    if act_id and lottery_id:
+        return ("coll", f"dlc:{act_id}:{lottery_id}")
     raw = getattr(item, "raw", None) or {}
     item_id = raw.get("item_id")
     if item_id is None:  # 防御：字段位置不同版本可能有差异
         item_id = (raw.get("properties") or {}).get("item_id")
-    if item_id is None:
-        item_id = raw.get("id") or getattr(item, "name", None) or ""
-    return ("coll", item_id)
+    if item_id is not None:
+        return ("coll", f"item:{item_id}")
+    raw_id = raw.get("id")
+    if raw_id is not None:
+        return ("coll", f"id:{raw_id}")
+    return ("coll", "name:" + (getattr(item, "name", None) or ""))
 
 
 class DownloadQueue(QObject):
