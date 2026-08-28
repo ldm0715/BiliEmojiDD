@@ -110,13 +110,16 @@ def main() -> None:
     shot(page, "download_page_1col_dark.png")
     page.close()
 
-    # 设置页
+    # 设置页（亮 / 暗对照，与「设置页面重新设计.png」逐行比对）
     from app.view.setting_page import SettingPage
 
-    sp = SettingPage()
-    sp.resize(900, 700)
-    shot(sp, "setting_page_dark.png")
-    sp.close()
+    for theme, tag in ((Theme.DARK, "dark"), (Theme.LIGHT, "light")):
+        setTheme(theme)
+        sp = SettingPage()
+        sp.resize(900, 900)
+        shot(sp, f"setting_page_{tag}.png")
+        sp.close()
+    setTheme(Theme.DARK)
 
     # 收藏集页（深色，搜索态）
     from app.view.dress_page import DressPage

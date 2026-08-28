@@ -1,4 +1,9 @@
-"""设置页：Cookie / 下载目录 / 主题。"""
+"""设置页：Cookie / 下载目录 / 主题（Fluent 设置卡片版式）。
+
+版式参照 Win11 / QFluentWidgets Gallery 设置页：大标题 → 分组标题 → 每行一张
+「图标 + 标题 / 灰色副标题 + 右侧控件」窄卡片，整页滚动。控件与槽函数沿用改版前
+的实现，本文件只负责「控件怎么摆」。
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,19 +17,23 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from qfluentwidgets import (
-    BodyLabel,
-    CaptionLabel,
-    CardWidget,
     ComboBox,
+    ExpandGroupSettingCard,
+    ExpandLayout,
     FluentIcon,
     InfoBarPosition,
     LineEdit,
     PasswordLineEdit,
     PrimaryPushButton,
     PushButton,
+    ScrollArea,
+    SettingCard,
+    SettingCardGroup,
     SpinBox,
-    StrongBodyLabel,
     Theme,
+    TitleLabel,
+    ToolTipFilter,
+    ToolTipPosition,
     qconfig,
     setTheme,
 )
@@ -40,57 +49,138 @@ from app.components.task import run_task
 
 _THEMES = [Theme.AUTO, Theme.LIGHT, Theme.DARK]
 
+_PAGE_MARGIN = 36  # 分组左右留白（与大标题对齐）
+_ROW_H = 60  # 展开区每行高度（addGroupWidget 靠固定高算展开高度）
+
+
+class _WidgetSettingCard(SettingCard):
+    """右侧可挂任意控件的设置行。
+
+    库里只有 `PushSettingCard`（单个原生 QPushButton），这里复用同一套接线：
+    `SettingCard.hBoxLayout` 末尾是 `addStretch(1)`，之后加的控件自然靠右排。
+    """
+
+    def __init__(self, icon, title, content=None, widgets=(), parent=None) -> None:
+        super().__init__(icon, title, content, parent)
+        for widget in widgets:
+            widget.setParent(self)
+            self.hBoxLayout.addWidget(widget, 0, Qt.AlignmentFlag.AlignRight)
+            self.hBoxLayout.addSpacing(8)
+        self.hBoxLayout.addSpacing(8)
+
+
+def _expand_row(widgets, parent: QWidget | None = None) -> QWidget:
+    """构造 `ExpandGroupSettingCard` 展开区的一行（左缩进对齐标题列）。
+
+    `addGroupWidget` 按 `viewLayout.sizeHint()` 算展开高度，行必须有确定高度。
+    """
+    row = QWidget(parent)
+    layout = QHBoxLayout(row)
+    layout.setContentsMargins(48, 12, 24, 12)
+    layout.setSpacing(8)
+    for index, widget in enumerate(widgets):
+        widget.setParent(row)
+        layout.addWidget(widget, 1 if index == 0 else 0)
+    row.setFixedHeight(_ROW_H)
+    return row
+
+
+def _button_box(buttons, parent: QWidget | None = None) -> QWidget:
+    """把多个按钮包成一个控件。
+
+    `HeaderSettingCard.addWidget` 每次调用都会重新把 `expandButton` 加进布局，
+    **只能调一次**，所以多控件必须先包容器。
+    """
+    box = QWidget(parent)
+    layout = QHBoxLayout(box)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(8)
+    for button in buttons:
+        button.setParent(box)
+        layout.addWidget(button)
+    return box
+
 
 class SettingPage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 16)
-        layout.setSpacing(16)
 
-        self._build_account_card(layout)
-        self._build_download_card(layout)
-        self._build_theme_card(layout)
-        layout.addStretch(1)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self.titleLabel = TitleLabel("设置", self)
+        # 缩进走布局边距，不用 setContentsMargins：Label 套了组件库 QSS，
+        # QStyleSheetStyle 会用 QSS 盒模型重算 contentsMargins，手动设的被忽略
+        title_box = QHBoxLayout()
+        title_box.setContentsMargins(_PAGE_MARGIN, 20, _PAGE_MARGIN, 12)
+        title_box.addWidget(self.titleLabel)
+        title_box.addStretch(1)
+        root.addLayout(title_box)
+
+        self.scrollArea = ScrollArea(self)
+        self.scrollWidget = QWidget()
+        self.scrollWidget.setObjectName("settingScrollWidget")
+        self.expandLayout = ExpandLayout(self.scrollWidget)
+        self.expandLayout.setContentsMargins(_PAGE_MARGIN, 0, _PAGE_MARGIN, 24)
+        self.expandLayout.setSpacing(28)
+        self.scrollArea.setWidget(self.scrollWidget)
+        self.scrollArea.setWidgetResizable(True)
+        self.scrollArea.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        # FluentWindow 给 stackedWidget 套了 QSS，页面靠「自己不画背景」透出窗口底色；
+        # QScrollArea 是原生控件，不显式透明会在暗色下露出 palette 的 Base 色块。
+        # `.QWidget` 类选择器只命中 viewport / scrollWidget 这类纯 QWidget，不级联到卡片。
+        self.scrollArea.setStyleSheet(
+            "QScrollArea{border:none;background:transparent}"
+            ".QWidget{background:transparent}"
+        )
+        root.addWidget(self.scrollArea, 1)
+
+        self._build_account_group()
+        self._build_download_group()
+        self._build_theme_group()
 
     # ---- 账号 ----
-    def _build_account_card(self, layout: QVBoxLayout) -> None:
-        card = CardWidget(self)
-        v = QVBoxLayout(card)
-        v.setSpacing(8)
+    def _build_account_group(self) -> None:
+        group = SettingCardGroup("账号", self.scrollWidget)
 
-        title = StrongBodyLabel("账号（Cookie）", card)
-        self.descLabel = BodyLabel(
-            "部分功能（全部表情包、收藏集下载）需要登录。Cookie 仅保存在本机"
-            "配置中，不会上传。",
-            card,
+        self.cookieCard = ExpandGroupSettingCard(
+            FluentIcon.VPN,
+            "B 站 Cookie",
+            "部分功能需要登录；Cookie 仅保存在本机配置中，不会上传",
+            group,
         )
-        self.descLabel.setWordWrap(True)
-
-        self.cookieEdit = PasswordLineEdit(card)
+        self.cookieEdit = PasswordLineEdit(self.cookieCard)
         self.cookieEdit.setPlaceholderText("SESSDATA=...; bili_jct=...")
         self.cookieEdit.setText(cfg.cookie.value)
+        self.saveBtn = PrimaryPushButton("保存", self.cookieCard)
+        self.cookieCard.addGroupWidget(_expand_row([self.cookieEdit, self.saveBtn]))
 
-        row = QHBoxLayout()
-        self.saveBtn = PrimaryPushButton("保存 Cookie", card)
-        self.verifyBtn = PushButton("验证表情包访问权限", card)
-        row.addWidget(self.saveBtn)
-        row.addWidget(self.verifyBtn)
-        row.addStretch(1)
-
-        self.configHintLabel = CaptionLabel(
-            f"配置保存在：{APP_CONFIG_DIR / 'config.json'}",
-            card,
+        self.verifyBtn = PushButton("验证", group)
+        self.verifyCard = _WidgetSettingCard(
+            FluentIcon.CERTIFICATE,
+            "访问权限",
+            "用当前 Cookie 试拉取全部表情包，确认登录是否有效",
+            [self.verifyBtn],
+            group,
         )
-        self.configHintLabel.setWordWrap(True)
 
-        v.addWidget(title)
-        v.addWidget(self.descLabel)
-        v.addWidget(self.cookieEdit)
-        v.addLayout(row)
-        v.addWidget(self.configHintLabel)
+        self.configCard = SettingCard(
+            FluentIcon.DOCUMENT,
+            "配置文件",
+            str(APP_CONFIG_DIR / "config.json"),
+            group,
+        )
 
-        layout.addWidget(card)
+        group.addSettingCards([self.cookieCard, self.verifyCard, self.configCard])
+        self.expandLayout.addWidget(group)
+        self.accountGroup = group
+
+        # 还没填 Cookie 时直接展开：首次使用不用先找到那个 ⌄
+        if not cfg.cookie.value.strip():
+            self.cookieCard.setExpand(True)
 
         self.saveBtn.clicked.connect(self._on_save)
         self.verifyBtn.clicked.connect(self._on_verify)
@@ -141,38 +231,52 @@ class SettingPage(QWidget):
         )
 
     # ---- 下载 ----
-    def _build_download_card(self, layout: QVBoxLayout) -> None:
-        card = CardWidget(self)
-        v = QVBoxLayout(card)
-        v.setSpacing(8)
+    def _build_download_group(self) -> None:
+        group = SettingCardGroup("下载", self.scrollWidget)
 
-        title = StrongBodyLabel("下载", card)
-
-        dir_row = QHBoxLayout()
-        dir_row.addWidget(BodyLabel("下载目录", card))
-        self.dirEdit = LineEdit(card)
+        self.dirCard = ExpandGroupSettingCard(
+            FluentIcon.DOWNLOAD,
+            "下载目录",
+            cfg.download_dir.value,
+            group,
+        )
+        self.dirEdit = LineEdit(self.dirCard)
         self.dirEdit.setText(cfg.download_dir.value)
-        self.browseBtn = PushButton("浏览…", card)
-        self.openDirBtn = PushButton("打开下载文件夹", card)
-        dir_row.addWidget(self.dirEdit, 1)
-        dir_row.addWidget(self.browseBtn)
-        dir_row.addWidget(self.openDirBtn)
+        self.browseBtn = PushButton("选择文件夹", self.dirCard)
+        self.openDirBtn = PushButton("打开下载文件夹", self.dirCard)
+        self.dirCard.addWidget(_button_box([self.browseBtn, self.openDirBtn]))
+        self.dirCard.addGroupWidget(_expand_row([self.dirEdit]))
+        # 副标题跟随路径（纯展示同步，保存逻辑仍读 dirEdit）；
+        # ExpandSettingCard 自身没有 setContent，标题行在 .card 上
+        self.dirEdit.textChanged.connect(self.dirCard.card.setContent)
 
-        proxy_row = QHBoxLayout()
-        proxy_row.addWidget(BodyLabel("代理地址", card))
-        self.protoCombo = ComboBox(card)
+        self.protoCombo = ComboBox(group)
         # qfluentwidgets addItem(text, icon, userData)：第二位置参是 icon，userData 须用关键字
         self.protoCombo.addItem("HTTP", userData="http")
         self.protoCombo.addItem("HTTPS", userData="https")
-        self.hostEdit = LineEdit(card)
+        self.protoCombo.setFixedWidth(105)
+        self.hostEdit = LineEdit(group)
         self.hostEdit.setPlaceholderText("IP / 域名")
-        self.hostEdit.setFixedWidth(180)
-        self.portSpin = SpinBox(card)
+        self.hostEdit.setFixedWidth(150)
+        self.portSpin = SpinBox(group)
         self.portSpin.setRange(1, 65535)
-        proxy_row.addWidget(self.protoCombo)
-        proxy_row.addWidget(self.hostEdit)
-        proxy_row.addWidget(self.portSpin)
-        proxy_row.addStretch(1)
+        # SpinBox 右侧上下按钮占掉约 64px，宽度给少了数字会被裁没
+        self.portSpin.setFixedWidth(130)
+        self.proxyCard = _WidgetSettingCard(
+            FluentIcon.GLOBE,
+            "代理",
+            "留空不使用代理",
+            [self.protoCombo, self.hostEdit, self.portSpin],
+            group,
+        )
+        self.proxyCard.setToolTip(
+            "代理仅支持 HTTP/HTTPS（socks 未安装 PySocks）；端口 1–65535，"
+            "留空主机名表示不使用代理。"
+        )
+        # 组件库风格的提示气泡（原生 tooltip 不跟主题）
+        self.proxyCard.installEventFilter(
+            ToolTipFilter(self.proxyCard, 500, ToolTipPosition.TOP)
+        )
 
         scheme, host, port = split_proxy(cfg.proxy.value)
         idx = self.protoCombo.findData(scheme if scheme in ("http", "https") else "http")
@@ -180,29 +284,32 @@ class SettingPage(QWidget):
         self.hostEdit.setText(host)
         self.portSpin.setValue(port if port > 0 else 7890)
 
-        thread_row = QHBoxLayout()
-        thread_row.addWidget(BodyLabel("下载线程数", card))
-        self.threadSpin = SpinBox(card)
+        self.threadSpin = SpinBox(group)
         self.threadSpin.setRange(1, 16)
         self.threadSpin.setValue(cfg.max_workers.value)
-        thread_row.addWidget(self.threadSpin)
-        thread_row.addStretch(1)
-
-        self.downloadSaveBtn = PrimaryPushButton("保存下载设置", card)
-        self.downloadHintLabel = CaptionLabel(
-            "代理仅支持 HTTP/HTTPS（socks 未安装 PySocks）；端口 1–65535，留空主机名表示不使用代理。",
-            card,
+        self.threadSpin.setFixedWidth(110)
+        self.threadCard = _WidgetSettingCard(
+            FluentIcon.SPEED_HIGH,
+            "下载线程数",
+            "同时下载的文件数（1–16）",
+            [self.threadSpin],
+            group,
         )
-        self.downloadHintLabel.setWordWrap(True)
 
-        v.addWidget(title)
-        v.addLayout(dir_row)
-        v.addLayout(proxy_row)
-        v.addLayout(thread_row)
-        v.addWidget(self.downloadSaveBtn, 0, Qt.AlignmentFlag.AlignRight)
-        v.addWidget(self.downloadHintLabel)
+        self.downloadSaveBtn = PrimaryPushButton("保存", group)
+        self.saveDownloadCard = _WidgetSettingCard(
+            FluentIcon.SAVE,
+            "保存下载设置",
+            "下载目录、代理与线程数修改后需保存才生效",
+            [self.downloadSaveBtn],
+            group,
+        )
 
-        layout.addWidget(card)
+        group.addSettingCards(
+            [self.dirCard, self.proxyCard, self.threadCard, self.saveDownloadCard]
+        )
+        self.expandLayout.addWidget(group)
+        self.downloadGroup = group
 
         self.browseBtn.clicked.connect(self._on_browse)
         self.openDirBtn.clicked.connect(self._on_open_dir)
@@ -255,30 +362,30 @@ class SettingPage(QWidget):
         )
 
     # ---- 主题 ----
-    def _build_theme_card(self, layout: QVBoxLayout) -> None:
-        card = CardWidget(self)
-        v = QVBoxLayout(card)
-        v.setSpacing(8)
+    def _build_theme_group(self) -> None:
+        group = SettingCardGroup("外观", self.scrollWidget)
 
-        title = StrongBodyLabel("外观", card)
-
-        row = QHBoxLayout()
-        row.addWidget(BodyLabel("主题", card))
-        self.themeCombo = ComboBox(card)
+        self.themeCombo = ComboBox(group)
         # qfluentwidgets addItem(text, icon, userData)：图标用组件库 FluentIcon
         self.themeCombo.addItem("跟随系统", FluentIcon.SYNC, userData=Theme.AUTO)
         self.themeCombo.addItem("浅色", FluentIcon.BRIGHTNESS, userData=Theme.LIGHT)
         self.themeCombo.addItem("深色", FluentIcon.CONSTRACT, userData=Theme.DARK)
+        self.themeCombo.setMinimumWidth(140)
         try:
             self.themeCombo.setCurrentIndex(_THEMES.index(cfg.theme.value))
         except ValueError:
             self.themeCombo.setCurrentIndex(0)
-        row.addWidget(self.themeCombo)
-        row.addStretch(1)
-        v.addWidget(title)
-        v.addLayout(row)
+        self.themeCard = _WidgetSettingCard(
+            FluentIcon.BRUSH,
+            "应用主题",
+            "调整应用的浅色 / 深色外观",
+            [self.themeCombo],
+            group,
+        )
 
-        layout.addWidget(card)
+        group.addSettingCard(self.themeCard)
+        self.expandLayout.addWidget(group)
+        self.themeGroup = group
 
         self.themeCombo.currentIndexChanged.connect(self._on_theme_changed)
         signal_bus.configChanged.connect(self._sync_theme_combo)

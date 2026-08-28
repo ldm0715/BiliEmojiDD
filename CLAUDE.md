@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-B 站表情包 / 收藏集（装扮）下载器 GUI：PySide6 + QFluentWidgets 界面，`biliemoji==2.0.0` 提供 B 站接口能力。功能：表情包按 ID 查询 / 全量列表多选加入下载队列、包详情（GIF 开关 + 加入下载 + 已下载过）下载、收藏集关键词搜索 + **竖版四列卡片（收藏集/装扮类别徽标）+ 多选加入下载队列** + 详情预览（动态尺寸图片网格 + 视频折叠列表 + image/video/both 下载 + 加入下载 + 已下载过）、**两个详情页点击图片全屏查看（遮罩 lightbox + 左右翻页）**、**下载队列 Tab**（会话级，**混合表情包 + 收藏集**，宽屏两列窄屏单列，全选/删除/清空/批量下载）、**下载设置**（目录 + 打开文件夹 + 代理 + 线程数）、**深色模式补全**（主题化 Label + 全局调色板）、**网格随窗口响应式填满**、**侧栏主题切换按钮**（图标随主题变换）、缩略图懒加载、全部表情包本地缓存。中文 UI。
+B 站表情包 / 收藏集（装扮）下载器 GUI：PySide6 + QFluentWidgets 界面，`biliemoji==2.0.0` 提供 B 站接口能力。功能：表情包按 ID 查询 / 全量列表多选加入下载队列、包详情（GIF 开关 + 加入下载 + 已下载过）下载、收藏集关键词搜索 + **竖版四列卡片（收藏集/装扮类别徽标）+ 多选加入下载队列** + 详情预览（动态尺寸图片网格 + 视频折叠列表 + image/video/both 下载 + 加入下载 + 已下载过）、**两个详情页点击图片全屏查看（遮罩 lightbox + 左右翻页）**、**下载队列 Tab**（会话级，**混合表情包 + 收藏集**，宽屏两列窄屏单列，全选/删除/清空/批量下载）、**下载设置**（目录 + 打开文件夹 + 代理 + 线程数，**Fluent 设置卡片版式：分组 + 每行一张窄卡片 + Cookie / 下载目录可展开**）、**深色模式补全**（主题化 Label + 全局调色板）、**网格随窗口响应式填满**、**侧栏主题切换按钮**（图标随主题变换）、缩略图懒加载、全部表情包本地缓存。中文 UI。
 
 ## 常用命令
 
@@ -19,6 +19,7 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/check_image_viewer.py   # 查看
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_grid_click.py     # 网格：点击 → 索引接线
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_improvements.py   # 改进批次：主题切换/双列几何/入队状态/侧栏
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_theme_switch.py   # 主题：侧栏按钮/下拉图标/网格容器重刷
+QT_QPA_PLATFORM=offscreen uv run python scripts/check_setting_page.py   # 设置页：功能控件仍在/版式/展开/窄窗口/主题
 QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py     # 各页面亮/暗截图到 screenshots/（人工比对用）
 ```
 
@@ -38,6 +39,7 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py     # 各页
 | `docs/image_viewer.md` | 图片查看器：letterbox 方案 + qfluentwidgets 上游坑全清单 |
 | `docs/ui_polish.md` | UI 改进：暗色主题补全（全局调色板 + 主题化 Label）、网格响应式填充、下载双列 + 去阴影、侧栏主题切换 |
 | `docs/theme_grid_fixes.md` | 主题跟随 + 网格铺满 + 已下载徽标：主题切换三处失效根因、`QListView` gridSize 忽略 spacing、收藏集目录命名统一 |
+| `docs/setting_page_redesign.md` | 设置页改版：Fluent 设置卡片版式（分组 + 窄卡片 + 可展开行）、只改界面不改功能的落实、`ExpandSettingCard` 上游坑 |
 
 **新增功能时同步更新**：`docs/` 下新建一篇（结构参照 `download_queue.md`），并登记进 `docs/README.md` 导航表与根 `README.md` 文档列表。
 
@@ -63,7 +65,7 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py     # 各页
   - `thumb.py`：异步缩略图。worker 向**常驻 `signal_bus`** 发原始信号（`thumbRawLoaded`/`thumbRawFailed`），主线程转 `QPixmap` 写 `QPixmapCache` 再广播 `thumbLoaded`。emit 用 try/except 守卫（应用关闭时忽略）。
   - `widgets.py`：`EmojiCard`/`EmojiGrid`（表情网格，**复用 `_CardGridBase`**，卡片可点 → `imageClicked(index)`）、`_CardGridBase`（**组件库 `ListWidget`** 网格基类，主题自动重刷：懒加载缩略图 + 多选 API + 动态单元格 + `itemClicked(item)` / `itemClickedAt(index, item)`，内含 `verticalScrollBar().rangeChanged → _layout_items()` 联动重排）、`PackageCard`+`PackageGrid`（表情包卡片/网格，响应式填满）、`DressCard`+`DressGrid`（收藏集竖版四列卡片）、`DetailCard`+`DressDetailGrid`（详情动态尺寸网格，卡片可点 → `imageClicked(index)`）、`QueueCard`+`QueueList`（下载队列，**宽屏两列窄屏单列**，封面随单元格自适应）。`PackageCard`/`DressCard` **右上角**挂 `InfoBadge.success('已下载')`、**勾选框移到左上角**（两者同时显示不打架）；`DressCard` 名称 `setWordWrap` 两行 + 整卡 `ToolTipFilter` 兜底完整名。**所有卡片文字用主题化 `CaptionLabel`/`StrongBodyLabel`/`BodyLabel` + `setTextColor(light, dark)`，自动随主题切换**；选中背景用**类选择器**（如 `QueueCard { background-color: ... }`）限定自身，不级联子 label。
   - `package_detail.py`（包详情视图，两个入口复用）、`page_bar.py`（自制数字分页）、`image_viewer.py`（遮罩图片查看器，见下节）、`download_runner.py`（`start_download` + `download_package_batch`/`download_collection_batch`/`download_mixed_batch`）、`download_queue.py`（下载队列单例）、`dress_helpers.py`（收藏集类别判别 + dlc id 读取）、`cache.py`（全部表情包缓存）。
-- `app/view/`：`emoji_page.py`（Pivot 双标签 + 多选工具栏）、`dress_page.py`（「仅看收藏集」**默认勾选** + `_last_summaries` 存原始结果、`toggled` 实时重过滤；详情 `_detail_summary` 显式字段）、`download_page.py`（下载队列页）、`setting_page.py`（主题下拉带图标：`_sync_theme_icon` + `bind_theme`，外部切换后 `configChanged` 同步）。
+- `app/view/`：`emoji_page.py`（Pivot 双标签 + 多选工具栏）、`dress_page.py`（「仅看收藏集」**默认勾选** + `_last_summaries` 存原始结果、`toggled` 实时重过滤；详情 `_detail_summary` 显式字段）、`download_page.py`（下载队列页）、`setting_page.py`（**Fluent 设置卡片版式**：`TitleLabel` 大标题 + `ScrollArea`/`ExpandLayout` + 三个 `SettingCardGroup`；Cookie / 下载目录用 `ExpandGroupSettingCard`，其余用本地 `_WidgetSettingCard`（`SettingCard` 尾部挂控件）；主题下拉带图标：`_sync_theme_icon` + `bind_theme`，外部切换后 `configChanged` 同步）。
 
 ## 图片查看器（`app/components/image_viewer.py`）
 
@@ -94,6 +96,10 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py     # 各页
 - **qfluentwidgets `ComboBox.addItem(text, icon, userData)`**：第二位置参数是 **icon** 不是 userData；要 `currentData()` 有值必须 `addItem('文本', userData=值)`（曾致下载模式 `mode.lower()` 崩、设置页代理/主题切换失效）。
 - **`ComboBox` 闭合态不显示选中项图标**：`ComboBoxBase.setCurrentIndex` 只 `setText` 从不 `setIcon`，`item.icon` 只在展开菜单时用。要显示得自己 `setIcon(combo.itemIcon(i))`（ComboBox 继承 QPushButton，`paintEvent` 会调 `QPushButton.paintEvent` 画出来）。补图标的时机有三处：建卡后、`currentIndexChanged`、以及 `blockSignals` 内的同步——首次 `addItem` 库会自动 `setCurrentIndex(0)`，之后设同一索引会提前 return 不发信号。`FluentIcon` 按取用瞬间的主题取黑/白 svg，主题切换后须重新 `setIcon`（用 `bind_theme` 绑定）。
 - **`NavigationInterface.addWidget(..., onClick=fn)` 已经会把 `fn` 连到 `widget.clicked`**（`NavigationPanel._registerWidget`）。再手动 `widget.clicked.connect(fn)` 就是连了两遍，一次点击跑两次——主题切换按钮曾因此「切了又切回」，看起来完全无效。
+- **设置卡片四条（详见 `docs/setting_page_redesign.md`）**：① `SettingCard.hBoxLayout` 末尾是 `addStretch(1)`，续 `addWidget` 即靠右排（`_WidgetSettingCard` 就靠这个挂 ComboBox/SpinBox）；② `HeaderSettingCard.addWidget` **只能调一次**（每次都会重新把 `expandButton` 塞进布局），多控件先包无边距容器；③ `ExpandSettingCard` 是 `QScrollArea` 子类，**没有 `setContent`**，标题行在 `.card` 上，且 `ExpandLayout.count()` 恒为 0（`addWidget` 进的是另一个列表）；④ `addGroupWidget` 的行必须 `setFixedHeight`（展开高度按 `viewLayout.sizeHint()` 算）。
+- **有 QSS 的控件 `setContentsMargins` 会被忽略**：`QStyleSheetStyle` 按 QSS 盒模型重算 contentsMargins（`TitleLabel` 等组件库 Label 都注册了 QSS），缩进要走**布局边距**——设置页大标题曾因此贴在 x≈2 而不是 36。
+- **页面里放 `QScrollArea` 必须显式透明**：页面在 `FluentWindow` 的 `stackedWidget` 子树里靠「自己不画背景」透出窗口底色，原生 `QScrollArea` 不透明会在暗色下露出 palette 的 Base 色块。写法 `QScrollArea{border:none;background:transparent}` + `.QWidget{background:transparent}`（`.QWidget` **类选择器**只命中 viewport / scrollWidget 这类纯 QWidget，不级联到卡片）。
+- **`SpinBox` 右侧上下按钮占约 64px**：宽度给到 90 以下数字会被裁没（设置页端口 130 / 线程数 110）。
 - **裸 `QListWidget` / `QToolButton` 等原生控件拿不到主题**：qfluentwidgets 靠 `updateStyleSheet()` 重刷 **已注册进 `styleSheetManager`** 的控件，原生控件从没注册过，背景色只能靠 `QPalette`——而全库从不调 `QApplication.setPalette`。列表用组件库 `ListWidget`（构造里 `FluentStyleSheet.LIST_VIEW.apply(self)` 自动注册），按钮用 `TransparentPushButton` 等，别自己写 QSS 兜。
 - **`QListView` 设了 `setGridSize()` 后忽略 `setSpacing()`**：步进就是 `gridSize.width()`，spacing 只会把**首列**卡片右移一格（其余列不动），于是第一、二列之间没有间隙、其他列有。所以 `_CardGridBase` 直接 `setSpacing(0)`，所有 `_cell_size()` 一律按 `(vw - _CARD_GUTTER) // 列数` 均分铺满整行；换行判据是 `列数 * cellW > 视口宽 - 1`（闭区间），算宽必须留余量，否则最后一列被挤到下一行、右侧反而空出一整格。选中高亮用 `_SEL_INSET` 的 QSS `margin` 从卡片边缘内缩来分隔相邻卡片。**首列与次列之间仍然没有间隙**（`setItemWidget` 只右移首列，改不掉），已知未修复，见 `docs/theme_grid_fixes.md` 第四节。
 - **`FluentIcon` 枚举名是 `CONSTRACT` 不是 `CONTRACT`**（官方把 contrast 拼错成 constract），用错名直接 `AttributeError`。
@@ -127,8 +133,9 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py     # 各页
 ## 验证
 
 - 启动：`uv run python main.py`（弹窗，需人工查看）。
-- **屏幕外脚本**（`QT_QPA_PLATFORM=offscreen`）：`scripts/` 下已有四个可直接跑的断言脚本（命令见「常用命令」）。新写脚本的套路：构建页面 + 注入假数据（假 `EmotePackage` / 预置 `QPixmapCache.insert(url, pm)` 绕开网络）+ 断言几何/信号/像素，失败 `sys.exit(1)`。
+- **屏幕外脚本**（`QT_QPA_PLATFORM=offscreen`）：`scripts/` 下已有五个可直接跑的断言脚本（命令见「常用命令」）。新写脚本的套路：构建页面 + 注入假数据（假 `EmotePackage` / 预置 `QPixmapCache.insert(url, pm)` 绕开网络）+ 断言几何/信号/像素，失败 `sys.exit(1)`。
   - 涉及后台任务时**必须轮询等任务完成再退出**（见线程规则），不要 `processEvents()` 后立刻结束。
+  - **等属性动画（展开/滚动）要等真实时间**：光 `processEvents()` 不推进时间，须 `processEvents()` + `time.sleep(0.01)` 轮询到目标状态（设置页展开断言曾因此假失败）。
   - 脚本从 `scripts/` 运行，开头需 `sys.path.insert(0, 项目根)` 才 import 得到 `app`。
   - 弹窗类组件用 `show()` 而非 `exec()`（offscreen 下 `exec()` 会阻塞脚本）。
 - 真实 B 站网络流程（拉取、下载、收藏集搜索）依赖用户 Cookie，无法自动化，需人工验证。
