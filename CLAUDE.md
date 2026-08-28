@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-B 站表情包 / 收藏集（装扮）下载器 GUI：PySide6 + QFluentWidgets 界面，`biliemoji==2.0.0` 提供 B 站接口能力。功能：表情包按 ID 查询 / 全量列表多选加入下载队列、包详情（GIF 开关）下载、收藏集关键词搜索 + **竖版四列卡片（收藏集/装扮类别徽标）+ 多选加入下载队列** + 详情预览（动态尺寸图片网格 + 视频折叠列表）+ image/video/both 下载、**下载队列 Tab**（会话级，**混合表情包 + 收藏集**，全选/删除/清空/批量下载）、**下载设置**（目录 + 代理 + 线程数）、缩略图懒加载、全部表情包本地缓存。中文 UI。
+B 站表情包 / 收藏集（装扮）下载器 GUI：PySide6 + QFluentWidgets 界面，`biliemoji==2.0.0` 提供 B 站接口能力。功能：表情包按 ID 查询 / 全量列表多选加入下载队列、包详情（GIF 开关）下载、收藏集关键词搜索 + **竖版四列卡片（收藏集/装扮类别徽标）+ 多选加入下载队列** + 详情预览（动态尺寸图片网格 + 视频折叠列表）+ image/video/both 下载、**两个详情页点击图片全屏查看（遮罩 lightbox + 左右翻页）**、**下载队列 Tab**（会话级，**混合表情包 + 收藏集**，全选/删除/清空/批量下载）、**下载设置**（目录 + 代理 + 线程数）、缩略图懒加载、全部表情包本地缓存。中文 UI。
 
 ## 常用命令
 
@@ -12,10 +12,29 @@ B 站表情包 / 收藏集（装扮）下载器 GUI：PySide6 + QFluentWidgets �
 uv sync                                   # 安装/重建依赖
 uv run python main.py                     # 启动应用（会弹窗）
 uv run ruff check .                       # lint（--fix 自动修复）
-uv run python -c "import biliemoji, qfluentwidgets, PySide6"   # 导入自检
+uv run python -c "import app.MainWindow"   # 导入自检（连带验证 biliemoji/qfluentwidgets/PySide6）
+
+# 屏幕外 GUI 验证脚本（无需 Cookie、不走网络）
+QT_QPA_PLATFORM=offscreen uv run python scripts/check_image_viewer.py   # 查看器：letterbox/翻页/关闭
+QT_QPA_PLATFORM=offscreen uv run python scripts/check_grid_click.py     # 网格：点击 → 索引接线
 ```
 
-无测试框架（未配置 pytest）。GUI 逻辑用屏幕外脚本验证（见「验证」）。
+无测试框架（未配置 pytest），也就没有「跑单个测试」的概念。GUI 逻辑靠 `scripts/` 下的屏幕外断言脚本验证，每个脚本自成一体、失败时 `exit 1`（见「验证」）。
+
+## 文档（`docs/`）
+
+改动涉及某个功能时**先读对应文档**，里面有本文件放不下的完整背景、踩坑推导与验证结论：
+
+| 文档 | 内容 |
+|---|---|
+| `docs/usage.md` | 面向用户：页面功能、Cookie 获取、缓存、常见问题 |
+| `docs/architecture.md` | 技术栈、模块分层、线程模型、数据流 |
+| `docs/development.md` | 环境、代码约定、**关键坑点 8 条**、修改指南 |
+| `docs/download_queue.md` | 下载队列初版（仅表情包）+ 下载设置 + 代理机制 |
+| `docs/collection_page.md` | 收藏集页改造 + 类别判别 + 混合队列 |
+| `docs/image_viewer.md` | 图片查看器：letterbox 方案 + qfluentwidgets 上游坑全清单 |
+
+**新增功能时同步更新**：`docs/` 下新建一篇（结构参照 `download_queue.md`），并登记进 `docs/README.md` 导航表与根 `README.md` 文档列表。
 
 ## 环境约束（重要，勿改动）
 
@@ -36,9 +55,26 @@ uv run python -c "import biliemoji, qfluentwidgets, PySide6"   # 导入自检
 - `app/components/`：
   - `task.py`：**线程层核心**。`Task`(QRunnable) + `TaskManager`（持有引用，finished 自动释放）+ `run_task()`。信号对象在主线程构造（亲和主线程），worker 线程 emit 自动 QueuedConnection。`autoDelete(False)` 防 C++ 对象提前释放丢信号。全局线程池 max 4。
   - `thumb.py`：异步缩略图。worker 向**常驻 `signal_bus`** 发原始信号（`thumbRawLoaded`/`thumbRawFailed`），主线程转 `QPixmap` 写 `QPixmapCache` 再广播 `thumbLoaded`。emit 用 try/except 守卫（应用关闭时忽略）。
-  - `widgets.py`：`EmojiCard`/`EmojiGrid`（表情网格）、`_CardGridBase`（QListWidget 网格基类：懒加载缩略图 + 多选 API + 动态单元格）、`PackageCard`+`PackageGrid`（表情包卡片/网格）、`DressCard`+`DressGrid`（收藏集竖版四列卡片）、`DetailCard`+`DressDetailGrid`（详情动态尺寸网格）、`QueueCard`+`QueueList`（下载队列横向混合卡片）。
-  - `package_detail.py`（包详情视图，两个入口复用）、`page_bar.py`（自制数字分页）、`download_runner.py`（`start_download` + `download_package_batch`/`download_collection_batch`/`download_mixed_batch`）、`download_queue.py`（下载队列单例）、`dress_helpers.py`（收藏集类别判别 + dlc id 读取）、`cache.py`（全部表情包缓存）。
+  - `widgets.py`：`EmojiCard`/`EmojiGrid`（表情网格，卡片可点 → `imageClicked(index)`）、`_CardGridBase`（QListWidget 网格基类：懒加载缩略图 + 多选 API + 动态单元格 + `itemClicked(item)` / `itemClickedAt(index, item)`）、`PackageCard`+`PackageGrid`（表情包卡片/网格）、`DressCard`+`DressGrid`（收藏集竖版四列卡片）、`DetailCard`+`DressDetailGrid`（详情动态尺寸网格，卡片可点 → `imageClicked(index)`）、`QueueCard`+`QueueList`（下载队列横向混合卡片）。
+  - `package_detail.py`（包详情视图，两个入口复用）、`page_bar.py`（自制数字分页）、`image_viewer.py`（遮罩图片查看器，见下节）、`download_runner.py`（`start_download` + `download_package_batch`/`download_collection_batch`/`download_mixed_batch`）、`download_queue.py`（下载队列单例）、`dress_helpers.py`（收藏集类别判别 + dlc id 读取）、`cache.py`（全部表情包缓存）。
 - `app/view/`：`emoji_page.py`（Pivot 双标签 + 多选工具栏）、`dress_page.py`、`download_page.py`（下载队列页）、`setting_page.py`。
+
+## 图片查看器（`app/components/image_viewer.py`）
+
+- 入口只有 `show_image_viewer(items, index, parent)`（`items` 为 `[(name, url), ...]`，`parent` 传 `page.window()`）；两个详情页复用：`EmojiGrid.imageClicked` / `DressDetailGrid.imageClicked` → 页面槽 → 该函数。
+- 组件全部复用现成的：`HorizontalFlipView`（悬浮左右箭头 + 滚轮 + 平滑动画）、`MaskDialogBase`（窗口内遮罩）、`HorizontalPipsPager`（页码点，>15 张时隐藏）。图片走 `thumb_manager.request` + `signal_bus.thumbLoaded`，**先 connect 再 request**（命中 `QPixmapCache` 是同步 emit），只预取当前索引 ±2（一次性请求几十张会占满 3 线程的缩略图池）。
+- GIF 只显示首帧（`FlipView` 存 `QImage`，动图需 `QMovie`，其 delegate 不支持）。
+
+### qfluentwidgets 上游坑（本组件已绕过，勿"修回去"）
+
+以下六条是改 `image_viewer.py` 时最容易"顺手改回去"的地方，完整推导见 `docs/image_viewer.md` 第五节。
+
+- **`FlipView._adjustItemSize` 按图片宽高比算 sizeHint**：① 图片未加载时 `QImage()` 高为 0，`KeepAspectRatio` 分支**除零崩**；② 图片异步到位后 sizeHint 变化，而 `scrollToIndex` 按前序 item 宽度累加算滚动量 → 已显示的图**跑偏**。`_ViewerFlipView` 覆写为固定 `sizeHint = itemSize`，图片预先 letterbox 合成到 `itemSize * dpr` 画布（使 delegate 里的 `image.scaled(size * r, ...)` 成为恒等变换）。
+- **`MaskDialogBase.setMaskColor` 的 B/G 参数写反**（`rgba(red, blue, green, alpha)`）：用纯黑遮罩正好绕过，别改成彩色。
+- **`MaskDialogBase` 把 `self.widget` 无对齐地塞进 `_hBoxLayout`** → 铺满整个 dialog，「点击遮罩空白处关闭」永远判不出来。须按 `MessageBoxBase` 的做法 `removeWidget` 后 `addWidget(self.widget, 1, Qt.AlignCenter)` 重新居中。
+- **`PipsPager.setCurrentIndex` 会发 `currentIndexChanged`**（经 `scrollToItem`），与 FlipView 双向绑定时要么加 guard 要么依赖 `FlipView.setCurrentIndex` 的同值早退；`setPageNumber` 内部也会 `setCurrentIndex(0)` 发一次信号，接线要放在它之后。
+- **`FlipView.setCurrentIndex` 在 `index == currentIndex()` 时早退不发信号**，而 `addImages` 已把 `_currentIndex` 置为 0 → 初始索引为 0 时必须手动同步一次 UI。
+- FlipView 继承 QListWidget，会吞掉方向键改 currentRow；查看器里给它和 pips 都设 `NoFocus`，方向键交给 dialog 的 `keyPressEvent`。
 
 ## 线程与 GUI 规则（易踩坑）
 
@@ -48,6 +84,7 @@ uv run python -c "import biliemoji, qfluentwidgets, PySide6"   # 导入自检
 - `QPixmap` 只能在主线程创建/使用；worker 线程只产 `QImage` 或字节数据。
 - `FlowLayout.takeAt(index)` 返回 **widget**（不是 QLayoutItem）；清理布局用 `widget.setParent(None)` + `deleteLater()` 防幽灵残影。
 - **`QPushButton` 垂直 size policy 默认 `Fixed`**：`QVBoxLayout` 里加 `stretch=1` 也拉不撑（海报被压成 12px 的坑，多余空间全给文字 label）；需撑满时 `setSizePolicy(Expanding, Expanding)`。
+- **卡片下标不要靠载荷身份反查**：`(name, url)` 这类内容相同的元组字面量会被 CPython 常量折叠成**同一个对象**（`items[1] is items[2]` 为真），`is` 反查会把两项判成同一下标。`_CardGridBase` 用建卡时的 `partial(self._emit_clicked, index)` 闭包发 `itemClickedAt(index, item)`。
 - **qfluentwidgets `ComboBox.addItem(text, icon, userData)`**：第二位置参数是 **icon** 不是 userData；要 `currentData()` 有值必须 `addItem('文本', userData=值)`（曾致下载模式 `mode.lower()` 崩、设置页代理/主题切换失效）。
 - **验证 worker 信号时**：不要写"短暂 `processEvents()` 后结束脚本"的测试——脚本退出早于 worker 会看到 `Internal C++ object ... already deleted` **假象**（真实 app 里 `app.exec()` 常驻无此问题）。要轮询等任务完成再退出。
 
@@ -75,6 +112,9 @@ uv run python -c "import biliemoji, qfluentwidgets, PySide6"   # 导入自检
 ## 验证
 
 - 启动：`uv run python main.py`（弹窗，需人工查看）。
-- GUI 逻辑用屏幕外脚本验证（`QT_QPA_PLATFORM=offscreen` 构建页面 + 注入假 `EmotePackage` 数据 + 检查几何/信号/像素断言），但必须**等待后台任务完成**（见线程规则）。
+- **屏幕外脚本**（`QT_QPA_PLATFORM=offscreen`）：`scripts/` 下已有两个可直接跑的断言脚本（命令见「常用命令」）。新写脚本的套路：构建页面 + 注入假数据（假 `EmotePackage` / 预置 `QPixmapCache.insert(url, pm)` 绕开网络）+ 断言几何/信号/像素，失败 `sys.exit(1)`。
+  - 涉及后台任务时**必须轮询等任务完成再退出**（见线程规则），不要 `processEvents()` 后立刻结束。
+  - 脚本从 `scripts/` 运行，开头需 `sys.path.insert(0, 项目根)` 才 import 得到 `app`。
+  - 弹窗类组件用 `show()` 而非 `exec()`（offscreen 下 `exec()` 会阻塞脚本）。
 - 真实 B 站网络流程（拉取、下载、收藏集搜索）依赖用户 Cookie，无法自动化，需人工验证。
 - 每次改动后跑 `uv run ruff check .` 与导入自检（`uv run python -c "import app.MainWindow"`）。

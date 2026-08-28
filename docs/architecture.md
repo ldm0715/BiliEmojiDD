@@ -32,6 +32,7 @@ app/
 │   ├── thumb.py        异步缩略图（独立线程池 + QPixmapCache）
 │   ├── widgets.py      _CardGridBase 网格基类；Package/Dress/Queue/Detail 卡片与网格
 │   ├── package_detail.py  表情包详情视图（两个入口复用）
+│   ├── image_viewer.py 遮罩图片查看器（FlipView lightbox + 左右翻页）
 │   ├── page_bar.py     自制数字分页条
 │   ├── download_runner.py 统一下载流程 + 表情包/收藏集/混合批量下载
 │   ├── download_queue.py  会话级下载队列（混合表情包 + 收藏集）
