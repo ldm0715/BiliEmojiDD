@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-B 站表情包 / 收藏集（装扮）下载器 GUI：PySide6 + QFluentWidgets 界面，`biliemoji==2.0.0` 提供 B 站接口能力。功能：表情包按 ID 查询 / 全量列表多选加入下载队列、包详情（GIF 开关 + 加入下载 + 已下载过）下载、收藏集关键词搜索 + **竖版四列卡片（收藏集/装扮类别徽标）+ 多选加入下载队列** + 详情预览（动态尺寸图片网格 + 视频折叠列表 + image/video/both 下载 + 加入下载 + 已下载过）、**两个详情页点击图片全屏查看（遮罩 lightbox + 左右翻页）**、**下载队列 Tab**（会话级，**混合表情包 + 收藏集**，宽屏两列窄屏单列，全选/删除/清空/批量下载）、**下载设置**（目录 + 打开文件夹 + 代理 + 线程数，**Fluent 设置卡片版式：分组 + 每行一张窄卡片 + Cookie / 下载目录可展开**）、**深色模式补全**（主题化 Label + 全局调色板）、**网格随窗口响应式填满**、**侧栏主题切换按钮**（图标随主题变换）、缩略图懒加载、全部表情包本地缓存。中文 UI。
+B 站表情包 / 收藏集（装扮）下载器 GUI：PySide6 + QFluentWidgets 界面，`biliemoji==2.0.0` 提供 B 站接口能力。功能：表情包按 ID 查询 / 全量列表多选加入下载队列、包详情（**GIF 开关按包内是否真有 gif_url 显隐** + 加入下载 + 已下载过）下载、收藏集关键词搜索 + **竖版四列卡片（收藏集/装扮类别徽标）+ 多选加入下载队列** + 详情预览（动态尺寸图片网格 + 视频折叠列表 + image/video/both 下载 + 加入下载 + 已下载过）、**两个详情页点击图片全屏查看（遮罩 lightbox + 左右翻页）**、**下载队列 Tab**（会话级，**混合表情包 + 收藏集**，宽屏两列窄屏单列，全选/删除/清空/批量下载，**卡片显示内容数量（懒加载）**、**全部成功的项下载后自动出队**）、**下载设置**（目录 + 打开文件夹 + 代理 + 线程数，**Fluent 设置卡片版式：分组 + 每行一张窄卡片 + Cookie / 下载目录可展开**）、**深色模式补全**（主题化 Label + 全局调色板）、**网格随窗口响应式填满**、**侧栏主题切换按钮**（图标随主题变换）、缩略图懒加载（**未到位时显示组件库加载环**）、全部表情包本地缓存。中文 UI。
 
 ## 常用命令
 
@@ -21,6 +21,7 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/check_improvements.py   # 改进
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_theme_switch.py   # 主题：侧栏按钮/下拉图标/网格容器重刷
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_setting_page.py   # 设置页：功能控件仍在/版式/展开/窄窗口/主题
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_pages_layout.py   # 三页版式：控件仍在/大标题对齐/多选行/详情卡/窄窗口
+QT_QPA_PLATFORM=offscreen uv run python scripts/check_download_improvements.py  # 下载体验：GIF行/内容数量/自动出队/加载环/去重键
 QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py     # 各页面亮/暗截图到 screenshots/（人工比对用）
 ```
 
@@ -42,6 +43,7 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py     # 各页
 | `docs/theme_grid_fixes.md` | 主题跟随 + 网格铺满 + 已下载徽标：主题切换三处失效根因、`QListView` gridSize 忽略 spacing、收藏集目录命名统一 |
 | `docs/setting_page_redesign.md` | 设置页改版：Fluent 设置卡片版式（分组 + 窄卡片 + 可展开行）、只改界面不改功能的落实、`ExpandSettingCard` 上游坑 |
 | `docs/page_card_layout.md` | 三页卡片版式：表情包 / 收藏集 / 下载页的大标题 + 命令卡 + 内容卡、`page_scaffold` 共用底座、长文本顶最小宽度等坑 |
+| `docs/download_page_improvements.md` | 下载体验优化：GIF 选项按需显隐、队列内容数量懒加载（`content_meta`）、全部成功自动出队（`BatchReport`）、缩略图加载环、**收藏集去重键 `item_id` 非唯一**的根因 |
 
 **新增功能时同步更新**：`docs/` 下新建一篇（结构参照 `download_queue.md`），并登记进 `docs/README.md` 导航表与根 `README.md` 文档列表。
 
@@ -65,6 +67,7 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py     # 各页
 - `app/components/`：
   - `task.py`：**线程层核心**。`Task`(QRunnable) + `TaskManager`（持有引用，finished 自动释放）+ `run_task()`。信号对象在主线程构造（亲和主线程），worker 线程 emit 自动 QueuedConnection。`autoDelete(False)` 防 C++ 对象提前释放丢信号。全局线程池 max 4。
   - `thumb.py`：异步缩略图。worker 向**常驻 `signal_bus`** 发原始信号（`thumbRawLoaded`/`thumbRawFailed`），主线程转 `QPixmap` 写 `QPixmapCache` 再广播 `thumbLoaded`。emit 用 try/except 守卫（应用关闭时忽略）。
+  - `content_meta.py`：下载项**内容概要**（图片/视频数）。结构同 `thumb.py`：独立 `QThreadPool(2)`（不占 `task_manager` 的 4 线程）、worker 发 `signal_bus.contentMetaRaw(key, meta)`、主线程写缓存后广播 `contentMetaLoaded`（**载荷 None = 取不到**）。`cached()` 对自带 `emote` 的完整 `EmotePackage` 同步推导（零请求）；`request()` 只在卡片可见时调；**失败记 `_failed` 本会话不重试**；`remember()` 供两个详情页喂数据。**`set_enabled(False)` 给屏幕外脚本关联网**（否则假 ID 排一堆 15s 超时把脚本挂住）。
   - `widgets.py`：`EmojiCard`/`EmojiGrid`（表情网格，**复用 `_CardGridBase`**，卡片可点 → `imageClicked(index)`）、`_CardGridBase`（**组件库 `ListWidget`** 网格基类，主题自动重刷：懒加载缩略图 + 多选 API + 动态单元格 + `itemClicked(item)` / `itemClickedAt(index, item)`，内含 `verticalScrollBar().rangeChanged → _layout_items()` 联动重排）、`PackageCard`+`PackageGrid`（表情包卡片/网格，响应式填满）、`DressCard`+`DressGrid`（收藏集竖版四列卡片）、`DetailCard`+`DressDetailGrid`（详情动态尺寸网格，卡片可点 → `imageClicked(index)`）、`QueueCard`+`QueueList`（下载队列，**宽屏两列窄屏单列**，封面随单元格自适应）。`PackageCard`/`DressCard` **右上角**挂 `InfoBadge.success('已下载')`、**勾选框移到左上角**（两者同时显示不打架）；`DressCard` 名称 `setWordWrap` 两行 + 整卡 `ToolTipFilter` 兜底完整名。**所有卡片文字用主题化 `CaptionLabel`/`StrongBodyLabel`/`BodyLabel` + `setTextColor(light, dark)`，自动随主题切换**；选中背景用**类选择器**（如 `QueueCard { background-color: ... }`）限定自身，不级联子 label。
   - `page_scaffold.py`：**四页共用版式底座**——`PAGE_MARGIN=36` / `page_title` / `title_row`（缩进走布局边距）/ `CommandCard`（`SimpleCardWidget` + `add_row` / `add_row_widget` / `add_widget`）/ `SectionCard`（`HeaderCardWidget`，内容区边距收紧）。卡片基类自带主题重绘，别自己写 QSS。
   - `package_detail.py`（包详情视图，两个入口复用；头部卡 + `SectionCard("表情预览")`，`add_leading_widget()` 供「返回列表」嵌入）、`page_bar.py`（自制数字分页）、`image_viewer.py`（遮罩图片查看器，见下节）、`download_runner.py`（`start_download` + `download_package_batch`/`download_collection_batch`/`download_mixed_batch`）、`download_queue.py`（下载队列单例）、`dress_helpers.py`（收藏集类别判别 + dlc id 读取）、`cache.py`（全部表情包缓存）。
@@ -112,10 +115,15 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py     # 各页
 - **`NavigationToolButton` 构造只有 `(icon, parent)`**（不像 `NavigationPushButton` 的 `(icon, text, isSelectable, parent)`）。
 - **主题化 Label**：文字优先用 `CaptionLabel`/`BodyLabel`/`StrongBodyLabel` + `setTextColor(light, dark)`，它们连 `qconfig.themeChanged` 自动切色；**不要**再给它们 `setStyleSheet` 设颜色（会覆盖主题色）。纯 QWidget 的背景/默认文字色依赖全局 palette（`theme.py` 已按主题应用）。
 - **验证 worker 信号时**：不要写"短暂 `processEvents()` 后结束脚本"的测试——脚本退出早于 worker 会看到 `Internal C++ object ... already deleted` **假象**（真实 app 里 `app.exec()` 常驻无此问题）。要轮询等任务完成再退出。
+- **缩略图加载环 `_SpinnerMixin`**（`widgets.py`）：`_center_spinner` 的早退判据必须用 **`isHidden()` 而不是 `not isVisible()`** —— 卡片尚未 `show()` 时子控件 `isVisible()` 恒为 False，用它会把建卡阶段的定位全部跳过，之后没有 resize 就永远卡在左上角 (0,0)。收环三条路径缺一不可：`set_pixmap()`、`_CardGridBase` 转发 `thumbRawFailed`、`set_cards()` 里 **url 为空的卡片建完即收环**（永远等不到信号，否则空转）。
+- **构造 `DownloadPage` 的屏幕外脚本必须 `content_meta.set_enabled(False)`**：队列卡片会为可见项懒加载内容数量，假 ID 会排一堆 15s 超时请求，脚本跑完退不出去。
 
 ## 下载队列与下载设置（要点）
 
-- **队列**：`download_queue`（`app/components/download_queue.py`）内存单例，**混合表情包 + 收藏集**，按 `item_key(item)`（`("pkg", id)` / `("coll", raw["item_id"])`）去重，`item_kind` 判类型；`changed` 信号驱动 `DownloadPage` 重建。**仅本次会话**，重启清空。
+- **队列**：`download_queue`（`app/components/download_queue.py`）内存单例，**混合表情包 + 收藏集**，按 `item_key(item)` 去重（表情包 `("pkg", id)`；**收藏集 `("coll", "dlc:<act>:<lottery>")`**），`item_kind` 判类型；`changed` 信号驱动 `DownloadPage` 重建。**仅本次会话**，重启清空。
+- **收藏集去重键不能用 `item_id`**：实测搜索接口里 **`item_id == properties.dlc_act_id`**，一个 dlc 活动下有多期 lottery（「2233的MBTI-能量之源」act=112667 lot=112709 与「2233的MBTI-ENFP」act=112667 lot=113521），每期都是独立的可下载收藏集。按 item_id 去重会把不同期判成同一项——多选加入时被悄悄丢掉、进详情页却因 `contains()` 命中显示「已加入」，和列表对不上（真实 Bug）。装扮（`type='ip'`，无 dlc id）退回 `item:`/`id:`/`name:` 前缀键。**别在别处硬编码键字面量**，一律 `item_key()`。
+- **内容数量**：`QueueCard.contentLabel` 四态（`内容: N 张图片` / `内容: N 张图片 · M 个视频` / `内容读取中…` / `内容数量未知`），数据来自 `content_meta`，`QueueList._update_visible` 只为**可见**卡片 `request`、`contentMetaLoaded` 按 key 回填。
+- **全部成功自动出队**：`download_*_batch` 返回 `BatchReport`（继承 biliemoji frozen `DownloadBatchResult`，多一个 `per_item: {item_key: ItemOutcome}`），`start_download(on_result=)` 把结果送回页面，`DownloadPage._on_batch_result` 移除 `all_ok` 的项。**SKIPPED 算成功**（文件已在本地）、**total==0 不算**（取详情失败 / 无可下文件）、**只在队列页批量下载触发**（详情页可只下图片或只下视频）。归属按 **`result.target.parent`**（`_resolve_target` 只改后缀不动父目录），不用下标对齐。
 - **队列布局**：`QueueList._cell_size()` 响应式——`vw >= 2*min_w` 时两列 `(vw-_CARD_GUTTER)//2`，否则单列 `vw-_CARD_GUTTER`；配合 `_CardGridBase` 的 `rangeChanged` 联动在滚动条收窄视口后重排。`QueueCard` 封面随单元格自适应（`max(72, min(h-16, round(w*0.28)))`，值未变不动防递归）；名称 `setWordWrap(True)` 防截断；信息区右留 24px 防文字跑进勾选框。
 - **详情页入队 / 已下载状态**：收藏集与表情包详情页都有「加入下载」按钮，状态走单一 `_sync_queue_btn`——每次打开详情重置「加入下载」禁用、`_show_detail`/`set_package` 后同步（已在队列 → 「已加入」禁用）、`download_queue.changed` 联动（移除/清空后恢复）、加入后自动「已加入」禁用；`_go_back` 清 `_detail_summary`。「已下载过」= `downloaded_exists(package_download_dir(...))`（目录存在且非空），目录命名与批量下载完全一致（`download_runner` 的 `package_download_dir` / `collection_download_dir` / `downloaded_exists`）。**收藏集目录一律按 `summary.name` 命名**（`collection_download_dir(summary)`）——搜索结果卡片手上只有 summary，若按 `certain_lottery_typed` 取回的 `coll.name` 命名，卡片徽标永远判不出已下载；所以收藏集详情页的单个下载也走 `download_collection_batch([summary], ...)` 而不是 `Dress.download_collection`（顺带拿到显式 proxies），`_refresh_downloaded` 同时认 summary 名与 coll 名两个目录以兼容改名前下载的旧数据。
 - **批量下载**：`download_runner.download_package_batch(ids, dest, *, gif=None, max_workers=None, on_progress=None)`（表情包）与 `download_collection_batch(collections, dest, *, mode='both', max_workers=None, on_progress=None)`（收藏集，目录 `collection_download_dir(summary)`，即按搜索结果名）同构；下载页 `download_mixed_batch` 按 `item_kind` 拆分、顺序执行两子批并合并 `DownloadBatchResult`。`max_workers` 传入值优先、None 才读 `cfg.max_workers.value`；逐项 `certain_*_typed`（**单个失败 `except Exception` 合成 FAILED 结果后继续**，不中断整批）；**一个 `Downloader` + 一个总进度条**；表情包目录 `包名[:60] [包ID]` 防同名覆盖、文件名截断。

@@ -34,6 +34,7 @@ uv run python main.py
 - [主题跟随 + 网格铺满 + 已下载徽标](docs/theme_grid_fixes.md) — 主题切换三处失效、详情网格右侧空白、卡片徽标
 - [设置页改版](docs/setting_page_redesign.md) — Fluent 设置卡片版式、可展开行、只改界面不改功能
 - [三页卡片版式](docs/page_card_layout.md) — 表情包 / 收藏集 / 下载页的大标题 + 命令卡 + 内容卡
+- [下载体验优化](docs/download_page_improvements.md) — GIF 选项按需显隐、队列内容数量、全部成功自动出队、加载环、去重键修复
 
 ## Cookie
 

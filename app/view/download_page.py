@@ -15,7 +15,7 @@ from qfluentwidgets import (
 )
 
 from app.common.config import cfg
-from app.common.notify import notify_warning
+from app.common.notify import notify_info, notify_warning
 from app.common.theme import SECONDARY_TEXT
 from app.components.download_queue import download_queue, item_key
 from app.components.download_runner import download_mixed_batch, start_download
@@ -172,10 +172,31 @@ class DownloadPage(QWidget):
             on_finished=self._on_download_finished,
             status_label=self.statusLabel,
             parent=self,
+            on_result=self._on_batch_result,
         )
         if not started:
             # 目录不可用：start_download 未启动任务、不会触发 finished，手动恢复一次
             self._on_download_finished()
+
+    def _on_batch_result(self, result) -> None:
+        """全部成功的项自动移出队列（SKIPPED 也算成功——文件已在本地）。
+
+        逐项归属来自 BatchReport.per_item；移除会触发 queue.changed → _rebuild，
+        额外弹一条提示，免得用户莫名其妙「东西怎么少了」。
+        """
+        per_item = getattr(result, "per_item", None) or {}
+        done = [key for key, outcome in per_item.items() if outcome.all_ok]
+        if not done:
+            return
+        removed = download_queue.remove(done)
+        if removed:
+            notify_info(
+                "已从队列移除",
+                f"{removed} 个已全部下载完成的内容已自动移出队列",
+                parent=self,
+                position=InfoBarPosition.TOP_RIGHT,
+                duration=4000,
+            )
 
     def _on_download_finished(self) -> None:
         # 幂等：任务异常 / 完成 / 未启动三条路径只恢复一次 UI

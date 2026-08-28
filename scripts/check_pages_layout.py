@@ -7,7 +7,7 @@
 2. 每页有大标题，标题与命令卡左边缘对齐（都在 PAGE_MARGIN）；
 3. 多选行随「多选」勾选显隐（隐藏时命令卡自动收缩一行）；
 4. 详情头部卡：`add_leading_widget` 的返回按钮在名称左侧；`set_package` 后按钮可用；
-5. 收藏集详情：有视频显示视频卡、无视频���卡隐藏；
+5. 收藏集详情：有视频显示视频卡、无视频整卡隐藏；
 6. 窄窗口（600）命令卡内控件不越界；下载页 980 宽仍是两列；
 7. 切主题后卡片背景色跟随（`BackgroundAnimationWidget` 生效）。
 
@@ -30,6 +30,7 @@ app = QApplication(sys.argv)
 # 配置文件里的 QFluentWidgets.ThemeMode（可能残留旧值），覆盖之前设置的主题
 from qfluentwidgets import CheckBox, ComboBox, SimpleCardWidget, Theme, setTheme
 
+from app.components.content_meta import content_meta
 from app.components.download_queue import download_queue
 from app.components.page_scaffold import PAGE_MARGIN, CommandCard, SectionCard
 from app.view.download_page import DownloadPage
@@ -37,6 +38,8 @@ from app.view.dress_page import DressPage
 from app.view.emoji_page import EmojiPage
 
 setTheme(Theme.LIGHT)
+# 队列卡片会为可见项懒加载「内容数量」，假 ID 会排一堆 15s 超时请求把脚本挂住
+content_meta.set_enabled(False)
 
 FAILS: list[str] = []
 

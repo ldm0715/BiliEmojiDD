@@ -16,8 +16,12 @@ app = QApplication(sys.argv)
 
 from qfluentwidgets import Theme, setTheme
 
+from app.components.content_meta import content_meta
 from app.components.download_queue import download_queue
 from app.components.widgets import DressCard, PackageCard, QueueCard
+
+# 队列卡片会为可见项懒加载「内容数量」，假数据会排一堆超时请求把脚本挂住
+content_meta.set_enabled(False)
 
 OUT = Path(__file__).resolve().parent.parent / "screenshots"
 OUT.mkdir(exist_ok=True)

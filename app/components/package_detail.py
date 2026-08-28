@@ -23,6 +23,7 @@ from qfluentwidgets import (
 from app.common.config import cfg
 from app.common.notify import notify_info, notify_success
 from app.common.theme import SECONDARY_TEXT
+from app.components.content_meta import ContentMeta, content_meta
 from app.components.download_queue import download_queue
 from app.components.download_runner import (
     download_package_batch,
@@ -72,11 +73,13 @@ class PackageDetailView(QWidget):
         for w in (self.downloadedLabel, self.queueBtn, self.downloadBtn):
             self._titleRow.addWidget(w, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        option_row = self.headerCard.add_row()
-        self.gifCheck = CheckBox("下载动图 (GIF)", self.headerCard)
+        # 下载选项行：整行显隐（包里没有任何 gif_url 时隐藏，勾了也只会回退 PNG）
+        self.gifRow, option_row = self.headerCard.add_row_widget()
+        self.gifCheck = CheckBox("下载动图 (GIF)", self.gifRow)
         self.gifCheck.setChecked(cfg.default_gif.value)
         option_row.addStretch(1)
         option_row.addWidget(self.gifCheck)
+        self.gifRow.setVisible(False)
 
         self.bar = ProgressBar(self.headerCard)
         self.bar.setFixedHeight(8)
@@ -121,6 +124,13 @@ class PackageDetailView(QWidget):
             if url:
                 items.append((em.text or "", url))
         self.grid.set_emotes(items)
+        # GIF 选项按「包里真的有没有 gif_url」显隐：pkg.is_gif 只看 meta.label_text，
+        # 与 download_package_batch 里 `if use_gif and em.gif_url` 的实际取用不同步
+        has_gif = any(em.gif_url for em in pkg.emote)
+        self.gifRow.setVisible(has_gif)
+        self.gifCheck.setChecked(has_gif and cfg.default_gif.value)
+        # 队列页要显示「多少张图片」，这里顺手喂缓存，省掉它再拉一次详情
+        content_meta.remember(pkg, ContentMeta(len(items), 0))
         self.downloadBtn.setEnabled(True)
         self._sync_queue_btn()
         self._refresh_downloaded()
@@ -131,6 +141,7 @@ class PackageDetailView(QWidget):
         self.nameLabel.setText(f"正在加载「{name or ''}」…")
         self.detailLabel.setText("")
         self.grid.set_emotes([])
+        self.gifRow.setVisible(False)
         self.downloadBtn.setEnabled(False)
         self.queueBtn.setText("加入下载")
         self.queueBtn.setEnabled(False)
@@ -141,6 +152,7 @@ class PackageDetailView(QWidget):
         self.nameLabel.setText("尚未选择表情包")
         self.detailLabel.setText("")
         self.grid.set_emotes([])
+        self.gifRow.setVisible(False)
         self.downloadBtn.setEnabled(False)
         self.queueBtn.setText("加入下载")
         self.queueBtn.setEnabled(False)

@@ -35,6 +35,7 @@ from app.common.exception import show_bili_error
 from app.common.notify import notify_info, notify_success, notify_warning
 from app.common.proxy import parse_proxy
 from app.common.theme import SECONDARY_TEXT
+from app.components.content_meta import collection_meta, content_meta
 from app.components.download_queue import download_queue
 from app.components.download_runner import (
     collection_download_dir,
@@ -331,6 +332,10 @@ class DressPage(QWidget):
         self.detailInfo.setText(
             f"名称: {collection.name or ''} · 图片 {len(items)} 个 · 视频 {len(videos)} 个"
         )
+        # 队列页要显示内容数量，这里顺手喂缓存，省掉它再拉一次收藏集详情
+        # （数量走 collection_meta：视频按「有视频的项数」算，与实际下载文件数一致）
+        if self._detail_summary is not None:
+            content_meta.remember(self._detail_summary, collection_meta(collection))
         self.detailBtn.setEnabled(True)
         self._sync_queue_btn()
         self._refresh_downloaded(collection)

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from functools import partial
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QRect, QSize, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import (
     CaptionLabel,
     CheckBox,
+    IndeterminateProgressRing,
     InfoBadge,
     ListWidget,
     StrongBodyLabel,
@@ -29,7 +30,8 @@ from qfluentwidgets.common.style_sheet import ThemeColor
 
 from app.common.signal_bus import signal_bus
 from app.common.theme import ORANGE_TEXT, SECONDARY_TEXT, bind_theme
-from app.components.download_queue import item_kind
+from app.components.content_meta import content_meta
+from app.components.download_queue import item_key, item_kind
 from app.components.download_runner import (
     collection_download_dir,
     downloaded_exists,
@@ -43,6 +45,45 @@ _PACKAGE_ICON = QSize(96, 96)
 _CARD_GUTTER = 8  # 单元格宽度预留量，保证整行不换行溢出
 _SEL_INSET = 4  # 选中高亮相对卡片边缘的内缩，相邻卡片之间由此形成间隙
 _BADGE_MARGIN = 6  # 「已下载」徽标距卡片右上角的边距
+_SPINNER_SIZE = 28  # 缩略图加载环直径
+
+
+class _SpinnerMixin:
+    """缩略图加载环：图片区居中显示 `IndeterminateProgressRing`，图到位即停。
+
+    纯 object mixin（不继承 QObject，避免多重继承下的元类/构造纠缠），
+    卡片自己在 __init__ / resizeEvent / set_pixmap 里显式调用三个方法。
+    缩略图池只有 3 个线程，一屏几十张图要排队，灰底看着像加载失败。
+    """
+
+    def _init_spinner(self) -> None:
+        self._spinner = IndeterminateProgressRing(self, start=False)
+        self._spinner.setFixedSize(_SPINNER_SIZE, _SPINNER_SIZE)
+        self._spinner.setStrokeWidth(3)
+        # 点击穿透：加载环盖在图片按钮上，不能吃掉点击
+        self._spinner.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._spinner.start()
+
+    def _center_spinner(self, rect: QRect) -> None:
+        """把加载环钉在图片区中心（rect 为图片区在卡片坐标系中的矩形）。"""
+        spinner = getattr(self, "_spinner", None)
+        # 判据用 isHidden 而非 isVisible：卡片尚未 show() 时子控件 isVisible() 恒为
+        # False，用它会把建卡阶段的定位全部跳过，之后没有 resize 就再也不居中了
+        if spinner is None or spinner.isHidden():
+            return
+        spinner.move(
+            rect.center().x() - _SPINNER_SIZE // 2,
+            rect.center().y() - _SPINNER_SIZE // 2,
+        )
+        spinner.raise_()
+
+    def thumb_done(self) -> None:
+        """图片到位或确认取不到：停动画并隐藏（幂等，网格失败回调也走这里）。"""
+        spinner = getattr(self, "_spinner", None)
+        if spinner is None or spinner.isHidden():
+            return
+        spinner.stop()
+        spinner.hide()
 
 
 def _package_cover_url(pkg):
@@ -56,7 +97,7 @@ def _package_cover_url(pkg):
     return pkg.url
 
 
-class EmojiCard(QWidget):
+class EmojiCard(_SpinnerMixin, QWidget):
     """单个表情卡片：图标（随单元格缩放）+ 全名（独立文字组件，超长分行，不遮挡图标）。
 
     复用 _CardGridBase 契约：整卡可点（clicked 载荷为卡片自身），供详情页打开图片查看器。
@@ -98,12 +139,18 @@ class EmojiCard(QWidget):
             self.textLabel.hide()
         layout.addWidget(self.textLabel, 0, Qt.AlignmentFlag.AlignHCenter)
 
+        self._init_spinner()
+
     def set_cell(self, size: QSize) -> None:
         """按单元格尺寸重排：图标撑宽，文字宽度对齐。"""
         self.setFixedSize(size)
         icon = max(24, size.width() - 8)
         self.iconLabel.setFixedSize(icon, icon)
         self.textLabel.setFixedWidth(size.width() - 8)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._center_spinner(self.iconLabel.geometry())
 
     def set_selectable(self, selectable: bool) -> None:
         """契约占位：表情不支持多选。"""
@@ -115,6 +162,7 @@ class EmojiCard(QWidget):
         return False
 
     def set_pixmap(self, pixmap) -> None:
+        self.thumb_done()
         self.iconLabel.setPixmap(
             pixmap.scaled(
                 self.iconLabel.size(),
@@ -130,7 +178,7 @@ class EmojiCard(QWidget):
         super().mousePressEvent(event)
 
 
-class PackageCard(QWidget):
+class PackageCard(_SpinnerMixin, QWidget):
     """表情包卡片：图片按钮（撑满）+ 居中文字 + 右上角勾选框 + 选中背景。
 
     用布局自适应单元格尺寸；图片用 QPushButton(setFlat=True) 点击整图触发勾选；
@@ -197,6 +245,7 @@ class PackageCard(QWidget):
         self._apply_bg(False)
         bind_theme(self, self._apply_theme)
         self._pin_checkbox()
+        self._init_spinner()
 
     def _pin_badge(self) -> None:
         b = self.downloadedBadge
@@ -225,6 +274,7 @@ class PackageCard(QWidget):
         super().resizeEvent(event)
         self._pin_checkbox()
         self._pin_badge()
+        self._center_spinner(self.imageBtn.geometry())
         self._apply_pixmap()
 
     def set_selectable(self, selectable: bool) -> None:
@@ -244,6 +294,7 @@ class PackageCard(QWidget):
         self.setFixedSize(size)
 
     def set_pixmap(self, pixmap) -> None:
+        self.thumb_done()
         self._last_pixmap = pixmap
         self._apply_pixmap()
 
@@ -344,6 +395,8 @@ class _CardGridBase(ListWidget):
         self._items: list = []
         self._last_cell: QSize | None = None
         signal_bus.thumbLoaded.connect(self._on_thumb_loaded)
+        # 加载失败也要收环，否则灰底上永远转着一个假的「加载中」
+        signal_bus.thumbRawFailed.connect(self._on_thumb_failed)
         # 垂直滚动条出现/消失会收窄视口，双列网格（QueueList）需随之重排，防横向溢出
         self.verticalScrollBar().rangeChanged.connect(lambda *_: self._layout_items())
 
@@ -369,6 +422,9 @@ class _CardGridBase(ListWidget):
             self.setItemWidget(item, card)
             if url:
                 self._url_cards.setdefault(url, []).append(card)
+            else:
+                # 没有封面地址 → 永远不会有 thumbLoaded/thumbRawFailed，立即收环
+                self._stop_spinner(card)
         self._last_cell = None  # 强制首次重排
         self._layout_items()
         self._update_visible()
@@ -468,6 +524,16 @@ class _CardGridBase(ListWidget):
         for card in self._url_cards.get(url, ()):
             card.set_pixmap(pixmap)
 
+    def _on_thumb_failed(self, url: str) -> None:
+        for card in self._url_cards.get(url, ()):
+            self._stop_spinner(card)
+
+    @staticmethod
+    def _stop_spinner(card) -> None:
+        stop = getattr(card, "thumb_done", None)
+        if callable(stop):
+            stop()
+
 
 class PackageGrid(_CardGridBase):
     """表情包卡片网格（旧 API 包装）：ListWidget + setItemWidget 挂载 PackageCard。
@@ -550,7 +616,7 @@ class EmojiGrid(_CardGridBase):
         self.imageClicked.emit(index)
 
 
-class DressCard(QWidget):
+class DressCard(_SpinnerMixin, QWidget):
     """收藏集搜索结果竖版卡片：封面(上, 3:4 等比) + 名称 + 分类徽标 + 右上角勾选框。
 
     纯 QWidget（不用 CardWidget：其基类 mouseReleaseEvent 只发 0 参数 clicked，
@@ -625,6 +691,7 @@ class DressCard(QWidget):
         self.downloadedBadge = InfoBadge.success("已下载", self)
         self.downloadedBadge.setVisible(self._downloaded)
 
+        self._init_spinner()
         bind_theme(self, self._apply_theme)
 
     def _pin_badge(self) -> None:
@@ -664,6 +731,7 @@ class DressCard(QWidget):
         )
         self.checkBox.raise_()
         self._pin_badge()
+        self._center_spinner(self.imageBtn.geometry())
         self._apply_pixmap()
 
     # ---- 多选 API ----
@@ -720,6 +788,7 @@ class DressCard(QWidget):
     # ---- 缩略图 ----
 
     def set_pixmap(self, pixmap) -> None:
+        self.thumb_done()
         self._last_pixmap = pixmap
         self._apply_pixmap()
 
@@ -771,7 +840,7 @@ class DressGrid(_CardGridBase):
         return self.checked_items()
 
 
-class DetailCard(QWidget):
+class DetailCard(_SpinnerMixin, QWidget):
     """收藏集详情卡片：竖版图片（等比）+ 名称。尺寸由网格 set_cell 动态给定。
 
     整卡可点（clicked 载荷为 (name, url) 元组），供详情页打开图片查看器。
@@ -813,11 +882,14 @@ class DetailCard(QWidget):
         self.nameLabel.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         layout.addWidget(self.nameLabel, 0, Qt.AlignmentFlag.AlignHCenter)
 
+        self._init_spinner()
+
     def set_cell(self, size: QSize) -> None:
         self.setFixedSize(size)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
+        self._center_spinner(self.imageBtn.geometry())
         self._apply_pixmap()
 
     def _on_image_clicked(self) -> None:
@@ -841,6 +913,7 @@ class DetailCard(QWidget):
         return False
 
     def set_pixmap(self, pixmap) -> None:
+        self.thumb_done()
         self._last_pixmap = pixmap
         self._apply_pixmap()
 
@@ -925,11 +998,13 @@ class DressDetailGrid(_CardGridBase):
         self.set_cards(items)
 
 
-class QueueCard(QWidget):
-    """下载队列横向卡片：自适应封面框(方块) + 名称 + 类别徽标 + ID/数量 + 右上角勾选框。
+class QueueCard(_SpinnerMixin, QWidget):
+    """下载队列横向卡片：自适应封面框(方块) + 名称 + 类别徽标 + ID/数量 + 内容概要
+    + 右上角勾选框。
 
     整卡可点：多选态切换勾选 + 选中高亮；横向布局，宽度随 set_cell 自动伸展。
     名称可换行（防截断），信息区右侧预留勾选框空间防遮挡。
+    内容概要（多少图片 / 多少视频）由 content_meta 懒加载，未取到时显示「内容读取中…」。
     """
 
     clicked = Signal(object)
@@ -968,11 +1043,16 @@ class QueueCard(QWidget):
         self.badgeLabel = CaptionLabel("", self)
         self.metaLabel = CaptionLabel("", self)
         self.metaLabel.setTextColor(*SECONDARY_TEXT)
-        for lbl in (self.nameLabel, self.badgeLabel, self.metaLabel):
+        self.contentLabel = CaptionLabel("", self)
+        self.contentLabel.setTextColor(*SECONDARY_TEXT)
+        # 不换行的 QLabel 会把整页最小宽度顶起来
+        self.contentLabel.setWordWrap(True)
+        for lbl in (self.nameLabel, self.badgeLabel, self.metaLabel, self.contentLabel):
             lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         info.addWidget(self.nameLabel)
         info.addWidget(self.badgeLabel)
         info.addWidget(self.metaLabel)
+        info.addWidget(self.contentLabel)
         layout.addLayout(info, 1)
 
         self.checkBox = CheckBox(self)
@@ -982,6 +1062,8 @@ class QueueCard(QWidget):
         self.checkBox.raise_()
 
         self._refresh_text()
+        self._refresh_content()
+        self._init_spinner()
         bind_theme(self, self._apply_theme)
 
     def _refresh_text(self) -> None:
@@ -1000,6 +1082,19 @@ class QueueCard(QWidget):
             price = s.sale_bp_forever
             price_text = f"{price:.2f} 元" if price is not None else "价格未知"
             self.metaLabel.setText(f"ID: {iid} · {price_text}")
+
+    def _refresh_content(self) -> None:
+        """内容概要：缓存/可同步推导的直接显示，否则等 QueueList 懒加载回填。"""
+        self.set_content_meta(content_meta.cached(self.item), pending=True)
+
+    def set_content_meta(self, meta, *, pending: bool = False) -> None:
+        """meta 为 None 时：pending=True 显示「读取中」，否则显示「未知」。"""
+        if meta is not None:
+            self.contentLabel.setText("内容: " + meta.text())
+        elif pending:
+            self.contentLabel.setText("内容读取中…")
+        else:
+            self.contentLabel.setText("内容数量未知")
 
     # ---- 主题 ----
 
@@ -1034,6 +1129,7 @@ class QueueCard(QWidget):
         img = max(72, min(self.height() - 16, round(self.width() * 0.28)))
         if self.imageBtn.width() != img:
             self.imageBtn.setFixedSize(img, img)
+        self._center_spinner(self.imageBtn.geometry())
         self._apply_pixmap()
 
     def set_selectable(self, selectable: bool) -> None:
@@ -1087,6 +1183,7 @@ class QueueCard(QWidget):
     # ---- 缩略图 ----
 
     def set_pixmap(self, pixmap) -> None:
+        self.thumb_done()
         self._last_pixmap = pixmap
         self._apply_pixmap()
 
@@ -1107,22 +1204,45 @@ class QueueCard(QWidget):
 
 
 class QueueList(_CardGridBase):
-    """下载队列网格（混合表情包 / 收藏集）：宽视口两列、窄视口单列，随窗口缩放实时切换。"""
+    """下载队列网格（混合表情包 / 收藏集）：宽视口两列、窄视口单列，随窗口缩放实时切换。
+
+    额外负责内容概要的懒加载：可见卡片才 `content_meta.request`，回填走
+    `signal_bus.contentMetaLoaded`（与缩略图同一节奏，滚到才请求）。
+    """
 
     queueClicked = Signal(object)
 
     _card_class = QueueCard
-    _min_cell = QSize(300, 112)
+    _min_cell = QSize(300, 128)  # 高度含名称(可两行) + 类别 + ID + 内容概要四行
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.itemClicked.connect(self.queueClicked.emit)
+        signal_bus.contentMetaLoaded.connect(self._on_content_meta)
 
     @staticmethod
     def _cover_url(item):
         if item_kind(item) == "collection":
             return item.image_cover
         return _package_cover_url(item)
+
+    def _update_visible(self) -> None:
+        super()._update_visible()
+        # 队列项大多不带明细，可见时才拉详情算「多少图片 / 多少视频」
+        viewport = self.viewport().rect()
+        for i in range(self.count()):
+            if not self.visualItemRect(self.item(i)).intersects(viewport):
+                continue
+            card = self.itemWidget(self.item(i))
+            if card is not None:
+                content_meta.request(card.item)
+
+    def _on_content_meta(self, key, meta) -> None:
+        # 队列规模小，直接按 key 遍历回填，不再维护一份索引
+        for i in range(self.count()):
+            card = self.itemWidget(self.item(i))
+            if card is not None and item_key(card.item) == key:
+                card.set_content_meta(meta)
 
     def _cell_size(self) -> QSize:
         # 响应式列数：可用宽度放得下两列（各至少 _min_cell 宽）→ 两列，否则单列铺满。
