@@ -18,11 +18,13 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import (
     CaptionLabel,
     CheckBox,
+    FluentIcon,
     InfoBarPosition,
     Pivot,
     PrimaryPushButton,
     PushButton,
     SearchLineEdit,
+    TransparentPushButton,
 )
 
 from app.common.config import cfg
@@ -34,6 +36,14 @@ from app.components.cache import load_all_packages_cache, save_all_packages_cach
 from app.components.download_queue import download_queue
 from app.components.package_detail import PackageDetailView
 from app.components.page_bar import PageBar
+from app.components.page_scaffold import (
+    PAGE_BOTTOM,
+    PAGE_MARGIN,
+    SECTION_SPACING,
+    CommandCard,
+    page_title,
+    title_row,
+)
 from app.components.task import run_task
 from app.components.widgets import PackageGrid
 
@@ -47,17 +57,19 @@ class _IdQueryTab(QWidget):
         super().__init__(parent)
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        layout.setContentsMargins(PAGE_MARGIN, 0, PAGE_MARGIN, PAGE_BOTTOM)
+        layout.setSpacing(SECTION_SPACING)
 
-        search_row = QHBoxLayout()
-        self.idEdit = SearchLineEdit(self)
+        self.searchCard = CommandCard(self)
+        search_row = self.searchCard.add_row()
+        self.idEdit = SearchLineEdit(self.searchCard)
         self.idEdit.setPlaceholderText("输入表情包 ID，如 53")
         self.idEdit.setFixedWidth(260)
-        self.queryBtn = PrimaryPushButton("查询", self)
+        self.queryBtn = PrimaryPushButton("查询", self.searchCard)
         search_row.addWidget(self.idEdit)
         search_row.addWidget(self.queryBtn)
         search_row.addStretch(1)
-        layout.addLayout(search_row)
+        layout.addWidget(self.searchCard)
 
         self.detail = PackageDetailView(self)
         layout.addWidget(self.detail, 1)
@@ -126,34 +138,37 @@ class _AllPackagesTab(QWidget):
         self.grid.selectionChanged.connect(self._update_select_label)
     def _build_list_page(self) -> None:
         layout = QVBoxLayout(self.listPage)
-        layout.setSpacing(12)
+        layout.setContentsMargins(PAGE_MARGIN, 0, PAGE_MARGIN, PAGE_BOTTOM)
+        layout.setSpacing(SECTION_SPACING)
 
-        top_row = QHBoxLayout()
-        self.fetchBtn = PrimaryPushButton("拉取全部表情包", self.listPage)
-        self.refreshBtn = PushButton("强制刷新", self.listPage)
+        self.commandCard = CommandCard(self.listPage)
+        top_row = self.commandCard.add_row()
+        self.fetchBtn = PrimaryPushButton("拉取全部表情包", self.commandCard)
+        self.refreshBtn = PushButton("强制刷新", self.commandCard)
         self.refreshBtn.setEnabled(False)
-        self.filterEdit = SearchLineEdit(self.listPage)
+        self.filterEdit = SearchLineEdit(self.commandCard)
         self.filterEdit.setPlaceholderText("输入关键词过滤（包名或 ID）")
         self.filterEdit.setEnabled(False)
-        self.countLabel = CaptionLabel("", self.listPage)
+        self.countLabel = CaptionLabel("", self.commandCard)
         self.countLabel.setTextColor(*SECONDARY_TEXT)
-        self.multiBtn = CheckBox("多选", self.listPage)
+        self.multiBtn = CheckBox("多选", self.commandCard)
         top_row.addWidget(self.fetchBtn)
         top_row.addWidget(self.refreshBtn)
         top_row.addWidget(self.multiBtn)
         top_row.addWidget(self.filterEdit, 1)
         top_row.addWidget(self.countLabel)
-        layout.addLayout(top_row)
 
-        select_row = QHBoxLayout()
-        self.selectLabel = CaptionLabel("已选 0 个", self.listPage)
+        # 多选行：只在多选态显示，隐藏时命令卡自动收缩一行
+        self.selectRow, select_row = self.commandCard.add_row_widget()
+        self.selectLabel = CaptionLabel("已选 0 个", self.selectRow)
         self.selectLabel.setTextColor(*SECONDARY_TEXT)
-        self.addBtn = PrimaryPushButton("加入下载", self.listPage)
+        self.addBtn = PrimaryPushButton("加入下载", self.selectRow)
         self.addBtn.setVisible(False)
         select_row.addWidget(self.selectLabel)
         select_row.addStretch(1)
         select_row.addWidget(self.addBtn)
-        layout.addLayout(select_row)
+        self.selectRow.setVisible(False)
+        layout.addWidget(self.commandCard)
 
         self.grid = PackageGrid(self.listPage)
         self.grid.packageClicked.connect(self._open_detail)
@@ -166,15 +181,15 @@ class _AllPackagesTab(QWidget):
 
     def _build_detail_page(self) -> None:
         layout = QVBoxLayout(self.detailPage)
-        layout.setSpacing(8)
-
-        back_row = QHBoxLayout()
-        self.backBtn = PushButton("返回列表", self.detailPage)
-        back_row.addWidget(self.backBtn)
-        back_row.addStretch(1)
-        layout.addLayout(back_row)
+        layout.setContentsMargins(PAGE_MARGIN, 0, PAGE_MARGIN, PAGE_BOTTOM)
+        layout.setSpacing(SECTION_SPACING)
 
         self.detail = PackageDetailView(self.detailPage)
+        # 「返回列表」放进详情头部卡左侧，省掉单独一行
+        self.backBtn = TransparentPushButton(
+            FluentIcon.LEFT_ARROW, "返回列表", self.detailPage
+        )
+        self.detail.add_leading_widget(self.backBtn)
         layout.addWidget(self.detail, 1)
 
     def _open_detail(self, pkg) -> None:
@@ -265,6 +280,7 @@ class _AllPackagesTab(QWidget):
         self._multi = bool(on)
         self.grid.set_selectable(self._multi)
         self.addBtn.setVisible(self._multi)
+        self.selectRow.setVisible(self._multi)  # 整行随多选态显隐
         self._update_select_label()
 
     def _update_select_label(self) -> None:
@@ -309,9 +325,18 @@ class EmojiPage(QWidget):
         )
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 16)
-        layout.setSpacing(8)
-        layout.addWidget(self.pivot)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.titleLabel = page_title("表情包", self)
+        layout.addLayout(title_row(self.titleLabel))
+
+        pivot_row = QHBoxLayout()
+        pivot_row.setContentsMargins(PAGE_MARGIN, 0, PAGE_MARGIN, SECTION_SPACING)
+        pivot_row.addWidget(self.pivot)
+        pivot_row.addStretch(1)
+        layout.addLayout(pivot_row)
+
         layout.addWidget(self.stackedWidget, 1)
 
         self.pivot.setCurrentItem("byId")

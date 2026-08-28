@@ -86,13 +86,78 @@ class _FakeSummary:
         self.sale_bp_forever = 6.0
 
 
+class _Emote:
+    def __init__(self, i: int) -> None:
+        self.text = f"表情{i}"
+        self.url = f"https://x.invalid/{i}.png"
+        self.gif_url = ""
+
+
 class _Pkg:
-    def __init__(self, pid: int) -> None:
+    def __init__(self, pid: int, emotes: int = 0) -> None:
         self.id = pid
         self.text = f"包{pid}"
         self.is_gif = False
-        self.emote = []
+        self.emote = [_Emote(i) for i in range(emotes)]
         self.url = ""
+
+
+class _FakeCollection:
+    name = "测试收藏集"
+
+    def __init__(self, images: int = 8, videos: int = 2) -> None:
+        self.item_list = [_FakeCollItem(i, i < videos) for i in range(images)]
+
+
+class _FakeCollItem:
+    def __init__(self, i: int, with_video: bool) -> None:
+        self.card_name = f"内容{i}"
+        self.card_img_download = f"https://x.invalid/c{i}.png"
+        self.video_list = [f"https://x.invalid/v{i}.mp4"] if with_video else []
+
+
+def shot_pages(theme: Theme, tag: str) -> None:
+    """四个页面的整页截图（版式比对用）。"""
+    setTheme(theme)
+    print(f"== pages {tag} ==")
+
+    from app.view.download_page import DownloadPage
+    from app.view.dress_page import DressPage
+    from app.view.emoji_page import EmojiPage
+
+    # 表情包页：全部表情包列表 + 详情
+    ep = EmojiPage()
+    ep.resize(1000, 760)
+    ep.pivot.setCurrentItem("all")
+    ep.stackedWidget.setCurrentWidget(ep.allTab)
+    ep.allTab._set_packages([_Pkg(i) for i in range(8)])
+    shot(ep, f"emoji_page_list_{tag}.png")
+    ep.allTab.stacked.setCurrentWidget(ep.allTab.detailPage)
+    ep.allTab.detail.set_package(_Pkg(53, emotes=10))
+    shot(ep, f"emoji_page_detail_{tag}.png")
+    ep.close()
+
+    # 收藏集页：搜索结果 + 详情
+    dp = DressPage()
+    dp.resize(1000, 760)
+    dp._show_results([_FakeSummary(f"收藏集{i}", collection=True) for i in range(8)])
+    shot(dp, f"dress_page_search_{tag}.png")
+    dp._detail_summary = _FakeSummary("测试收藏集")
+    dp.stacked.setCurrentWidget(dp.detailPage)
+    dp.detailName.setText("测试收藏集")
+    dp._show_detail(_FakeCollection())
+    shot(dp, f"dress_page_detail_{tag}.png")
+    dp.close()
+
+    # 下载页：队列非空
+    download_queue.clear()
+    for i in range(6):
+        download_queue.add(_Pkg(i))
+    dl = DownloadPage()
+    dl.resize(1000, 760)
+    shot(dl, f"download_page_{tag}.png")
+    dl.close()
+    download_queue.clear()
 
 
 def main() -> None:
@@ -109,6 +174,7 @@ def main() -> None:
     page.resize(420, 640)
     shot(page, "download_page_1col_dark.png")
     page.close()
+    download_queue.clear()
 
     # 设置页（亮 / 暗对照，与「设置页面重新设计.png」逐行比对）
     from app.view.setting_page import SettingPage
@@ -119,16 +185,10 @@ def main() -> None:
         sp.resize(900, 900)
         shot(sp, f"setting_page_{tag}.png")
         sp.close()
-    setTheme(Theme.DARK)
 
-    # 收藏集页（深色，搜索态）
-    from app.view.dress_page import DressPage
-
-    dp = DressPage()
-    dp.resize(1000, 680)
-    dp._show_results([_FakeSummary(f"收藏集{i}", collection=True) for i in range(6)])
-    shot(dp, "dress_search_dark.png")
-    dp.close()
+    # 表情包 / 收藏集 / 下载三页整页版式
+    shot_pages(Theme.LIGHT, "light")
+    shot_pages(Theme.DARK, "dark")
 
     # 浅色对照：表情包卡 / 收藏集卡
     render(Theme.LIGHT, "LIGHT")

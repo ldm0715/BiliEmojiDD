@@ -159,7 +159,7 @@ for name, card in (("Cookie", page.cookieCard), ("下载目录", page.dirCard)):
     check(card.height() == folded, f"{name} 卡收起复原（{card.height()} == {folded}）")
 
 print("== 4b. 未填 Cookie 时默认展开（首次使用不用先找 ⌄） ==")
-from app.common.config import cfg  # noqa: E402
+from app.common.config import cfg
 
 fresh = SettingPage()
 fresh.show()

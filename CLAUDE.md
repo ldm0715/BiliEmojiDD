@@ -20,6 +20,7 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/check_grid_click.py     # 网格
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_improvements.py   # 改进批次：主题切换/双列几何/入队状态/侧栏
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_theme_switch.py   # 主题：侧栏按钮/下拉图标/网格容器重刷
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_setting_page.py   # 设置页：功能控件仍在/版式/展开/窄窗口/主题
+QT_QPA_PLATFORM=offscreen uv run python scripts/check_pages_layout.py   # 三页版式：控件仍在/大标题对齐/多选行/详情卡/窄窗口
 QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py     # 各页面亮/暗截图到 screenshots/（人工比对用）
 ```
 
@@ -40,6 +41,7 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py     # 各页
 | `docs/ui_polish.md` | UI 改进：暗色主题补全（全局调色板 + 主题化 Label）、网格响应式填充、下载双列 + 去阴影、侧栏主题切换 |
 | `docs/theme_grid_fixes.md` | 主题跟随 + 网格铺满 + 已下载徽标：主题切换三处失效根因、`QListView` gridSize 忽略 spacing、收藏集目录命名统一 |
 | `docs/setting_page_redesign.md` | 设置页改版：Fluent 设置卡片版式（分组 + 窄卡片 + 可展开行）、只改界面不改功能的落实、`ExpandSettingCard` 上游坑 |
+| `docs/page_card_layout.md` | 三页卡片版式：表情包 / 收藏集 / 下载页的大标题 + 命令卡 + 内容卡、`page_scaffold` 共用底座、长文本顶最小宽度等坑 |
 
 **新增功能时同步更新**：`docs/` 下新建一篇（结构参照 `download_queue.md`），并登记进 `docs/README.md` 导航表与根 `README.md` 文档列表。
 
@@ -64,8 +66,9 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py     # 各页
   - `task.py`：**线程层核心**。`Task`(QRunnable) + `TaskManager`（持有引用，finished 自动释放）+ `run_task()`。信号对象在主线程构造（亲和主线程），worker 线程 emit 自动 QueuedConnection。`autoDelete(False)` 防 C++ 对象提前释放丢信号。全局线程池 max 4。
   - `thumb.py`：异步缩略图。worker 向**常驻 `signal_bus`** 发原始信号（`thumbRawLoaded`/`thumbRawFailed`），主线程转 `QPixmap` 写 `QPixmapCache` 再广播 `thumbLoaded`。emit 用 try/except 守卫（应用关闭时忽略）。
   - `widgets.py`：`EmojiCard`/`EmojiGrid`（表情网格，**复用 `_CardGridBase`**，卡片可点 → `imageClicked(index)`）、`_CardGridBase`（**组件库 `ListWidget`** 网格基类，主题自动重刷：懒加载缩略图 + 多选 API + 动态单元格 + `itemClicked(item)` / `itemClickedAt(index, item)`，内含 `verticalScrollBar().rangeChanged → _layout_items()` 联动重排）、`PackageCard`+`PackageGrid`（表情包卡片/网格，响应式填满）、`DressCard`+`DressGrid`（收藏集竖版四列卡片）、`DetailCard`+`DressDetailGrid`（详情动态尺寸网格，卡片可点 → `imageClicked(index)`）、`QueueCard`+`QueueList`（下载队列，**宽屏两列窄屏单列**，封面随单元格自适应）。`PackageCard`/`DressCard` **右上角**挂 `InfoBadge.success('已下载')`、**勾选框移到左上角**（两者同时显示不打架）；`DressCard` 名称 `setWordWrap` 两行 + 整卡 `ToolTipFilter` 兜底完整名。**所有卡片文字用主题化 `CaptionLabel`/`StrongBodyLabel`/`BodyLabel` + `setTextColor(light, dark)`，自动随主题切换**；选中背景用**类选择器**（如 `QueueCard { background-color: ... }`）限定自身，不级联子 label。
-  - `package_detail.py`（包详情视图，两个入口复用）、`page_bar.py`（自制数字分页）、`image_viewer.py`（遮罩图片查看器，见下节）、`download_runner.py`（`start_download` + `download_package_batch`/`download_collection_batch`/`download_mixed_batch`）、`download_queue.py`（下载队列单例）、`dress_helpers.py`（收藏集类别判别 + dlc id 读取）、`cache.py`（全部表情包缓存）。
-- `app/view/`：`emoji_page.py`（Pivot 双标签 + 多选工具栏）、`dress_page.py`（「仅看收藏集」**默认勾选** + `_last_summaries` 存原始结果、`toggled` 实时重过滤；详情 `_detail_summary` 显式字段）、`download_page.py`（下载队列页）、`setting_page.py`（**Fluent 设置卡片版式**：`TitleLabel` 大标题 + `ScrollArea`/`ExpandLayout` + 三个 `SettingCardGroup`；Cookie / 下载目录用 `ExpandGroupSettingCard`，其余用本地 `_WidgetSettingCard`（`SettingCard` 尾部挂控件）；主题下拉带图标：`_sync_theme_icon` + `bind_theme`，外部切换后 `configChanged` 同步）。
+  - `page_scaffold.py`：**四页共用版式底座**——`PAGE_MARGIN=36` / `page_title` / `title_row`（缩进走布局边距）/ `CommandCard`（`SimpleCardWidget` + `add_row` / `add_row_widget` / `add_widget`）/ `SectionCard`（`HeaderCardWidget`，内容区边距收紧）。卡片基类自带主题重绘，别自己写 QSS。
+  - `package_detail.py`（包详情视图，两个入口复用；头部卡 + `SectionCard("表情预览")`，`add_leading_widget()` 供「返回列表」嵌入）、`page_bar.py`（自制数字分页）、`image_viewer.py`（遮罩图片查看器，见下节）、`download_runner.py`（`start_download` + `download_package_batch`/`download_collection_batch`/`download_mixed_batch`）、`download_queue.py`（下载队列单例）、`dress_helpers.py`（收藏集类别判别 + dlc id 读取）、`cache.py`（全部表情包缓存）。
+- `app/view/`：**四页统一 Fluent 卡片版式**（大标题 → 命令卡 → 内容，页边距 36，见 `docs/page_card_layout.md`）。`emoji_page.py`（Pivot 双标签 + 命令卡；多选行按需显隐；详情「返回列表」在头部卡内）、`dress_page.py`（搜索命令卡；详情头部卡 + `SectionCard("内容预览")` + 视频卡；「仅看收藏集」**默认勾选** + `_last_summaries` 存原始结果、`toggled` 实时重过滤；详情 `_detail_summary` 显式字段）、`download_page.py`（命令卡含计数/批量按钮/状态/进度条 + 队列列表）、`setting_page.py`（**Fluent 设置卡片版式**：`TitleLabel` 大标题 + `ScrollArea`/`ExpandLayout` + 三个 `SettingCardGroup`；Cookie / 下载目录用 `ExpandGroupSettingCard`，其余用本地 `_WidgetSettingCard`（`SettingCard` 尾部挂控件）；主题下拉带图标：`_sync_theme_icon` + `bind_theme`，外部切换后 `configChanged` 同步）。
 
 ## 图片查看器（`app/components/image_viewer.py`）
 
@@ -100,6 +103,9 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py     # 各页
 - **有 QSS 的控件 `setContentsMargins` 会被忽略**：`QStyleSheetStyle` 按 QSS 盒模型重算 contentsMargins（`TitleLabel` 等组件库 Label 都注册了 QSS），缩进要走**布局边距**——设置页大标题曾因此贴在 x≈2 而不是 36。
 - **页面里放 `QScrollArea` 必须显式透明**：页面在 `FluentWindow` 的 `stackedWidget` 子树里靠「自己不画背景」透出窗口底色，原生 `QScrollArea` 不透明会在暗色下露出 palette 的 Base 色块。写法 `QScrollArea{border:none;background:transparent}` + `.QWidget{background:transparent}`（`.QWidget` **类选择器**只命中 viewport / scrollWidget 这类纯 QWidget，不级联到卡片）。
 - **`SpinBox` 右侧上下按钮占约 64px**：宽度给到 90 以下数字会被裁没（设置页端口 130 / 线程数 110）。
+- **不换行的 `QLabel` 会把整页最小宽度顶起来**：`minimumSizeHint` 就是整串文字宽度，详情页长名一度让页面缩不到最小窗口（598px）。标题/元信息/提示类 Label 一律 `setWordWrap(True)`。
+- **隐藏的子页不会重新布局**：`QStackedWidget` 非当前页、未 `show()` 的 Tab，几何停留在上次可见时的尺寸——写几何断言前先切到该页，否则量到过期数字「假通过」。
+- **断言脚本里的假图 URL 要预置 `QPixmapCache`**：否则每个 URL 排一个 15s 超时的下载任务，脚本跑完卡着退不出去。
 - **裸 `QListWidget` / `QToolButton` 等原生控件拿不到主题**：qfluentwidgets 靠 `updateStyleSheet()` 重刷 **已注册进 `styleSheetManager`** 的控件，原生控件从没注册过，背景色只能靠 `QPalette`——而全库从不调 `QApplication.setPalette`。列表用组件库 `ListWidget`（构造里 `FluentStyleSheet.LIST_VIEW.apply(self)` 自动注册），按钮用 `TransparentPushButton` 等，别自己写 QSS 兜。
 - **`QListView` 设了 `setGridSize()` 后忽略 `setSpacing()`**：步进就是 `gridSize.width()`，spacing 只会把**首列**卡片右移一格（其余列不动），于是第一、二列之间没有间隙、其他列有。所以 `_CardGridBase` 直接 `setSpacing(0)`，所有 `_cell_size()` 一律按 `(vw - _CARD_GUTTER) // 列数` 均分铺满整行；换行判据是 `列数 * cellW > 视口宽 - 1`（闭区间），算宽必须留余量，否则最后一列被挤到下一行、右侧反而空出一整格。选中高亮用 `_SEL_INSET` 的 QSS `margin` 从卡片边缘内缩来分隔相邻卡片。**首列与次列之间仍然没有间隙**（`setItemWidget` 只右移首列，改不掉），已知未修复，见 `docs/theme_grid_fixes.md` 第四节。
 - **`FluentIcon` 枚举名是 `CONSTRACT` 不是 `CONTRACT`**（官方把 contrast 拼错成 constract），用错名直接 `AttributeError`。

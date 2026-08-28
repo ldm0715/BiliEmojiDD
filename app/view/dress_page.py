@@ -7,7 +7,6 @@ from biliemoji import Dress
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QHBoxLayout,
     QListWidgetItem,
     QStackedWidget,
     QVBoxLayout,
@@ -26,7 +25,8 @@ from qfluentwidgets import (
     ProgressBar,
     PushButton,
     SearchLineEdit,
-    StrongBodyLabel,
+    SimpleCardWidget,
+    SubtitleLabel,
     TransparentPushButton,
 )
 
@@ -44,6 +44,15 @@ from app.components.download_runner import (
 )
 from app.components.dress_helpers import dlc_ids, is_collection
 from app.components.image_viewer import show_image_viewer
+from app.components.page_scaffold import (
+    PAGE_BOTTOM,
+    PAGE_MARGIN,
+    SECTION_SPACING,
+    CommandCard,
+    SectionCard,
+    page_title,
+    title_row,
+)
 from app.components.task import run_task
 from app.components.widgets import DressDetailGrid, DressGrid
 
@@ -59,8 +68,11 @@ class DressPage(QWidget):
         self._detail_items: list[tuple[str, str]] = []  # 详情图片 (name, url)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 12, 16, 16)
-        root.setSpacing(8)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self.titleLabel = page_title("收藏集", self)
+        root.addLayout(title_row(self.titleLabel))
 
         self.stacked = QStackedWidget(self)
         self.searchPage = QWidget(self)
@@ -90,102 +102,121 @@ class DressPage(QWidget):
     # ---- 搜索页 ----
     def _build_search_page(self) -> None:
         layout = QVBoxLayout(self.searchPage)
-        layout.setSpacing(8)
+        layout.setContentsMargins(PAGE_MARGIN, 0, PAGE_MARGIN, PAGE_BOTTOM)
+        layout.setSpacing(SECTION_SPACING)
 
-        top_row = QHBoxLayout()
-        self.kwEdit = SearchLineEdit(self.searchPage)
+        self.searchCard = CommandCard(self.searchPage)
+        top_row = self.searchCard.add_row()
+        self.kwEdit = SearchLineEdit(self.searchCard)
         self.kwEdit.setPlaceholderText("输入收藏集关键词，如 2233")
-        self.onlyCollCheck = CheckBox("仅看收藏集", self.searchPage)
+        self.onlyCollCheck = CheckBox("仅看收藏集", self.searchCard)
         self.onlyCollCheck.setChecked(True)  # 默认只看收藏集（装扮无法下载）
-        self.multiBtn = CheckBox("多选", self.searchPage)
-        self.searchBtn = PrimaryPushButton("搜索", self.searchPage)
+        self.multiBtn = CheckBox("多选", self.searchCard)
+        self.searchBtn = PrimaryPushButton("搜索", self.searchCard)
         top_row.addWidget(self.kwEdit, 1)
         top_row.addWidget(self.onlyCollCheck)
         top_row.addWidget(self.multiBtn)
         top_row.addWidget(self.searchBtn)
-        layout.addLayout(top_row)
 
-        select_row = QHBoxLayout()
-        self.selectLabel = CaptionLabel("已选 0 个", self.searchPage)
+        # 多选行：只在多选态显示，隐藏时命令卡自动收缩一行
+        self.selectRow, select_row = self.searchCard.add_row_widget()
+        self.selectLabel = CaptionLabel("已选 0 个", self.selectRow)
         self.selectLabel.setTextColor(*SECONDARY_TEXT)
-        self.addBtn = PrimaryPushButton("加入下载", self.searchPage)
+        self.addBtn = PrimaryPushButton("加入下载", self.selectRow)
         self.addBtn.setVisible(False)
         select_row.addWidget(self.selectLabel)
         select_row.addStretch(1)
         select_row.addWidget(self.addBtn)
-        layout.addLayout(select_row)
+        self.selectRow.setVisible(False)
+        layout.addWidget(self.searchCard)
 
         self.grid = DressGrid(self.searchPage)
         layout.addWidget(self.grid, 1)
 
         self.hintLabel = BodyLabel("搜索 B 站装扮 / 收藏集，点击卡片查看详情", self.searchPage)
         self.hintLabel.setTextColor(*SECONDARY_TEXT)
+        self.hintLabel.setWordWrap(True)
         self.hintLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.hintLabel)
 
     # ---- 详情页 ----
     def _build_detail_page(self) -> None:
         layout = QVBoxLayout(self.detailPage)
-        layout.setSpacing(8)
+        layout.setContentsMargins(PAGE_MARGIN, 0, PAGE_MARGIN, PAGE_BOTTOM)
+        layout.setSpacing(SECTION_SPACING)
 
-        top_row = QHBoxLayout()
-        self.backBtn = PushButton("返回搜索", self.detailPage)
-        title_layout = QVBoxLayout()
-        title_layout.setSpacing(4)
-        self.detailName = StrongBodyLabel("", self.detailPage)
-        self.detailInfo = BodyLabel("", self.detailPage)
-        self.detailInfo.setTextColor(*SECONDARY_TEXT)
-        title_layout.addWidget(self.detailName)
-        title_layout.addWidget(self.detailInfo)
-        top_row.addWidget(self.backBtn)
-        top_row.addLayout(title_layout, 1)
-        layout.addLayout(top_row)
-
-        layout.addWidget(BodyLabel("内容预览"))
-
-        self.detailGrid = DressDetailGrid(self.detailPage)
-        layout.addWidget(self.detailGrid, 1)
-
-        # 视频区：可折叠（默认收起），点标题展开
-        self.videoToggle = TransparentPushButton(
-            FluentIcon.CHEVRON_RIGHT, "视频内容", self.detailPage
+        # 头部卡：返回 + 名称 / 信息 + 徽标 + 下载模式 + 按钮 + 进度条
+        self.headerCard = CommandCard(self.detailPage)
+        title_line = self.headerCard.add_row()
+        self.backBtn = TransparentPushButton(
+            FluentIcon.LEFT_ARROW, "返回搜索", self.headerCard
         )
-        self.videoToggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.videoToggle.clicked.connect(self._toggle_video)
-        self.videoToggle.hide()
-        layout.addWidget(self.videoToggle, 0, Qt.AlignmentFlag.AlignLeft)
+        title_box = QVBoxLayout()
+        title_box.setContentsMargins(0, 0, 0, 0)
+        title_box.setSpacing(2)
+        self.detailName = SubtitleLabel("", self.headerCard)
+        self.detailInfo = CaptionLabel("", self.headerCard)
+        self.detailInfo.setTextColor(*SECONDARY_TEXT)
+        # 换行：QLabel 不换行时最小宽度就是整串文字宽度，长收藏集名会顶得整页缩不下去
+        self.detailName.setWordWrap(True)
+        self.detailInfo.setWordWrap(True)
+        title_box.addWidget(self.detailName)
+        title_box.addWidget(self.detailInfo)
+        self.downloadedLabel = InfoBadge.success("已下载", self.headerCard)
+        self.downloadedLabel.hide()
+        self.queueBtn = PushButton("加入下载", self.headerCard)
+        self.queueBtn.setEnabled(False)
+        self.detailBtn = PrimaryPushButton("下载到本地", self.headerCard)
+        self.detailBtn.setEnabled(False)
+        title_line.addWidget(self.backBtn, 0, Qt.AlignmentFlag.AlignVCenter)
+        title_line.addLayout(title_box, 1)
+        for w in (self.downloadedLabel, self.queueBtn, self.detailBtn):
+            title_line.addWidget(w, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self.videoList = ListWidget(self.detailPage)
-        self.videoList.setMaximumHeight(150)
-        self.videoList.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.videoList.hide()
-        layout.addWidget(self.videoList)
-
-        download_row = QHBoxLayout()
-        download_row.addWidget(BodyLabel("下载内容:"))
-        self.modeCombo = ComboBox(self.detailPage)
+        mode_row = self.headerCard.add_row()
+        self.modeCombo = ComboBox(self.headerCard)
         # 注意：qfluentwidgets ComboBox.addItem(text, icon, userData)，第二位置参是 icon
         self.modeCombo.addItem("静态图片", userData="image")
         self.modeCombo.addItem("动态视频", userData="video")
         self.modeCombo.addItem("图片 + 视频", userData="both")
         self.modeCombo.setCurrentIndex(2)
-        self.downloadedLabel = InfoBadge.success("已下载", self.detailPage)
-        self.downloadedLabel.hide()
-        self.queueBtn = PushButton("加入下载", self.detailPage)
-        self.queueBtn.setEnabled(False)
-        self.detailBtn = PrimaryPushButton("下载到本地", self.detailPage)
-        self.detailBtn.setEnabled(False)
-        download_row.addWidget(self.modeCombo)
-        download_row.addWidget(self.downloadedLabel)
-        download_row.addStretch(1)
-        download_row.addWidget(self.queueBtn)
-        download_row.addWidget(self.detailBtn)
-        layout.addLayout(download_row)
+        self.modeCombo.setMinimumWidth(140)
+        mode_row.addStretch(1)
+        mode_row.addWidget(BodyLabel("下载内容:", self.headerCard))
+        mode_row.addWidget(self.modeCombo)
 
-        self.detailBar = ProgressBar(self.detailPage)
+        self.detailBar = ProgressBar(self.headerCard)
         self.detailBar.setFixedHeight(8)
         self.detailBar.hide()
-        layout.addWidget(self.detailBar)
+        self.headerCard.add_widget(self.detailBar)
+        layout.addWidget(self.headerCard)
+
+        # 预览卡：图片网格
+        self.previewCard = SectionCard("内容预览", self.detailPage)
+        self.detailGrid = DressDetailGrid(self.previewCard)
+        self.previewCard.add_widget(self.detailGrid)
+        layout.addWidget(self.previewCard, 1)
+
+        # 视频卡：折叠标题（默认收起）+ 列表，无视频时整卡隐藏
+        self.videoCard = SimpleCardWidget(self.detailPage)
+        video_box = QVBoxLayout(self.videoCard)
+        video_box.setContentsMargins(12, 8, 12, 12)
+        video_box.setSpacing(8)
+        self.videoToggle = TransparentPushButton(
+            FluentIcon.CHEVRON_RIGHT, "视频内容", self.videoCard
+        )
+        self.videoToggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.videoToggle.clicked.connect(self._toggle_video)
+        self.videoToggle.hide()
+        video_box.addWidget(self.videoToggle, 0, Qt.AlignmentFlag.AlignLeft)
+
+        self.videoList = ListWidget(self.videoCard)
+        self.videoList.setMaximumHeight(150)
+        self.videoList.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.videoList.hide()
+        video_box.addWidget(self.videoList)
+        self.videoCard.hide()
+        layout.addWidget(self.videoCard)
 
     # ---- 搜索 ----
     def _on_search(self) -> None:
@@ -258,6 +289,7 @@ class DressPage(QWidget):
         self.videoToggle.setIcon(FluentIcon.CHEVRON_RIGHT)
         self.videoList.clear()
         self.videoList.hide()
+        self.videoCard.hide()  # 视频卡随 videoToggle 一起显隐
         self.detailBtn.setEnabled(False)
         self.stacked.setCurrentWidget(self.detailPage)
 
@@ -294,6 +326,7 @@ class DressPage(QWidget):
             self.videoToggle.show()
         else:
             self.videoToggle.hide()
+        self.videoCard.setVisible(bool(videos))  # 无视频时整卡隐藏
         self.videoList.hide()
         self.detailInfo.setText(
             f"名称: {collection.name or ''} · 图片 {len(items)} 个 · 视频 {len(videos)} 个"
@@ -329,6 +362,7 @@ class DressPage(QWidget):
     def _set_multi(self, on: bool) -> None:
         self.grid.set_selectable(on)
         self.addBtn.setVisible(on)
+        self.selectRow.setVisible(on)  # 整行随多选态显隐
         self._update_select_label()
 
     def _update_select_label(self) -> None:

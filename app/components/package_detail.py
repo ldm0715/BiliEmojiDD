@@ -1,21 +1,23 @@
-"""表情包详情视图：包信息 + 缩略图网格 + GIF 开关 + 加入下载 + 下载 + 进度条。
+"""表情包详情视图：头部卡（信息 + 操作 + 进度）+ 预览卡（缩略图网格）。
 
-供「按 ID 查询」与「全部表情包」两个标签页复用。
+供「按 ID 查询」与「全部表情包」两个标签页复用。「全部表情包」还会通过
+`add_leading_widget` 把「返回列表」按钮塞进头部卡左侧。
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QVBoxLayout, QWidget
 from qfluentwidgets import (
-    BodyLabel,
+    CaptionLabel,
     CheckBox,
     InfoBadge,
     InfoBarPosition,
     PrimaryPushButton,
     ProgressBar,
     PushButton,
-    StrongBodyLabel,
+    SubtitleLabel,
 )
 
 from app.common.config import cfg
@@ -29,6 +31,7 @@ from app.components.download_runner import (
     start_download,
 )
 from app.components.image_viewer import show_image_viewer
+from app.components.page_scaffold import SECTION_SPACING, CommandCard, SectionCard
 from app.components.widgets import EmojiGrid
 
 
@@ -40,45 +43,63 @@ class PackageDetailView(QWidget):
         self._pkg = None
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(SECTION_SPACING)
 
-        self.nameLabel = StrongBodyLabel("尚未选择表情包", self)
-        self.detailLabel = BodyLabel("", self)
+        # ---- 头部卡：名称 / 元信息 / 徽标 / 操作按钮 / 进度条 ----
+        self.headerCard = CommandCard(self)
+        self._titleRow = self.headerCard.add_row()
+
+        title_box = QVBoxLayout()
+        title_box.setContentsMargins(0, 0, 0, 0)
+        title_box.setSpacing(2)
+        self.nameLabel = SubtitleLabel("尚未选择表情包", self.headerCard)
+        self.detailLabel = CaptionLabel("", self.headerCard)
         self.detailLabel.setTextColor(*SECONDARY_TEXT)
-        layout.addWidget(self.nameLabel)
-        layout.addWidget(self.detailLabel)
+        # 换行：QLabel 不换行时最小宽度就是整串文字宽度，长包名会顶得整页缩不下去
+        self.nameLabel.setWordWrap(True)
+        self.detailLabel.setWordWrap(True)
+        title_box.addWidget(self.nameLabel)
+        title_box.addWidget(self.detailLabel)
+        self._titleRow.addLayout(title_box, 1)
 
-        layout.addWidget(BodyLabel("表情预览"))
-
-        self.grid = EmojiGrid(self)
-        layout.addWidget(self.grid, 1)
-
-        download_row = QHBoxLayout()
-        self.gifCheck = CheckBox("下载动图 (GIF)", self)
-        self.gifCheck.setChecked(cfg.default_gif.value)
-        self.downloadedLabel = InfoBadge.success("已下载", self)
+        self.downloadedLabel = InfoBadge.success("已下载", self.headerCard)
         self.downloadedLabel.hide()
-        self.queueBtn = PushButton("加入下载", self)
+        self.queueBtn = PushButton("加入下载", self.headerCard)
         self.queueBtn.setEnabled(False)
-        self.downloadBtn = PrimaryPushButton("下载到本地", self)
+        self.downloadBtn = PrimaryPushButton("下载到本地", self.headerCard)
         self.downloadBtn.setEnabled(False)
-        download_row.addWidget(self.gifCheck)
-        download_row.addWidget(self.downloadedLabel)
-        download_row.addStretch(1)
-        download_row.addWidget(self.queueBtn)
-        download_row.addWidget(self.downloadBtn)
-        layout.addLayout(download_row)
+        for w in (self.downloadedLabel, self.queueBtn, self.downloadBtn):
+            self._titleRow.addWidget(w, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self.bar = ProgressBar(self)
+        option_row = self.headerCard.add_row()
+        self.gifCheck = CheckBox("下载动图 (GIF)", self.headerCard)
+        self.gifCheck.setChecked(cfg.default_gif.value)
+        option_row.addStretch(1)
+        option_row.addWidget(self.gifCheck)
+
+        self.bar = ProgressBar(self.headerCard)
         self.bar.setFixedHeight(8)
         self.bar.hide()
-        layout.addWidget(self.bar)
+        self.headerCard.add_widget(self.bar)
+        layout.addWidget(self.headerCard)
+
+        # ---- 预览卡：表情网格 ----
+        self.previewCard = SectionCard("表情预览", self)
+        self.grid = EmojiGrid(self.previewCard)
+        self.previewCard.add_widget(self.grid)
+        layout.addWidget(self.previewCard, 1)
 
         self.queueBtn.clicked.connect(self._on_add_to_queue)
         self.downloadBtn.clicked.connect(self._on_download)
         self.grid.imageClicked.connect(self._open_image_viewer)
         # 队列变化时同步「加入下载/已加入」按钮状态
         download_queue.changed.connect(self._sync_queue_btn)
+
+    def add_leading_widget(self, widget: QWidget) -> None:
+        """把控件（如「返回列表」按钮）插到头部卡标题行最左侧。"""
+        widget.setParent(self.headerCard)
+        self._titleRow.insertWidget(0, widget, 0, Qt.AlignmentFlag.AlignVCenter)
 
     def _open_image_viewer(self, index: int) -> None:
         items = self.grid.items()

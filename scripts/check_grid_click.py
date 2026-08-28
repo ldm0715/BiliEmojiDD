@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # 项目根
 
+from PySide6.QtGui import QColor, QPixmap, QPixmapCache
 from PySide6.QtWidgets import QApplication
 
 app = QApplication(sys.argv)
@@ -16,6 +17,29 @@ app = QApplication(sys.argv)
 from app.components.widgets import DressDetailGrid, EmojiGrid, PackageGrid, QueueList
 
 FAILS: list[str] = []
+
+
+def preload(*urls: str) -> None:
+    """把假图预置进 QPixmapCache：thumb_manager.request 同步命中，不起下载任务。
+
+    不预置的话每个假 URL 都会排一个 15s 超时的网络任务，脚本跑完要等全局线程池
+    收工才退得出去（表现为脚本「卡住」）。
+    """
+    pm = QPixmap(8, 8)
+    pm.fill(QColor("#888888"))
+    for url in urls:
+        if url:
+            QPixmapCache.insert(url, pm)
+
+
+preload(
+    "https://x.invalid/a.png",
+    "https://x.invalid/b.png",
+    "https://x.invalid/c.png",
+    "https://x.invalid/same.png",
+    "https://x.invalid/1.png",
+    *[f"https://x.invalid/p{i}.png" for i in range(10)],
+)
 
 
 def check(cond: bool, msg: str) -> None:

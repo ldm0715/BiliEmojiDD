@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
@@ -19,6 +19,14 @@ from app.common.notify import notify_warning
 from app.common.theme import SECONDARY_TEXT
 from app.components.download_queue import download_queue, item_key
 from app.components.download_runner import download_mixed_batch, start_download
+from app.components.page_scaffold import (
+    PAGE_BOTTOM,
+    PAGE_MARGIN,
+    SECTION_SPACING,
+    CommandCard,
+    page_title,
+    title_row,
+)
 from app.components.widgets import QueueList
 
 
@@ -30,44 +38,54 @@ class DownloadPage(QWidget):
         self._downloading = False
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        header = QHBoxLayout()
-        self.countLabel = CaptionLabel("共 0 个内容", self)
+        self.titleLabel = page_title("下载队列", self)
+        layout.addLayout(title_row(self.titleLabel))
+
+        body = QVBoxLayout()
+        body.setContentsMargins(PAGE_MARGIN, 0, PAGE_MARGIN, PAGE_BOTTOM)
+        body.setSpacing(SECTION_SPACING)
+        layout.addLayout(body, 1)
+
+        # 命令卡：计数 + 批量操作 + 下载状态 / 进度条（空闲时后两者隐藏，卡片自动收缩）
+        self.commandCard = CommandCard(self)
+        header = self.commandCard.add_row()
+        self.countLabel = CaptionLabel("共 0 个内容", self.commandCard)
         self.countLabel.setTextColor(*SECONDARY_TEXT)
-        self.selectAllBtn = PushButton("全选", self)
-        self.deleteBtn = PushButton("删除选中", self)
-        self.clearBtn = PushButton("清空", self)
-        self.downloadBtn = PrimaryPushButton("下载选中", self)
+        self.selectAllBtn = PushButton("全选", self.commandCard)
+        self.deleteBtn = PushButton("删除选中", self.commandCard)
+        self.clearBtn = PushButton("清空", self.commandCard)
+        self.downloadBtn = PrimaryPushButton("下载选中", self.commandCard)
         header.addWidget(self.countLabel)
         header.addStretch(1)
         header.addWidget(self.selectAllBtn)
         header.addWidget(self.deleteBtn)
         header.addWidget(self.clearBtn)
         header.addWidget(self.downloadBtn)
-        layout.addLayout(header)
+
+        self.statusLabel = BodyLabel("", self.commandCard)
+        self.statusLabel.setTextColor(*SECONDARY_TEXT)
+        self.statusLabel.hide()
+        self.commandCard.add_widget(self.statusLabel)
+
+        self.bar = ProgressBar(self.commandCard)
+        self.bar.setFixedHeight(8)
+        self.bar.hide()
+        self.commandCard.add_widget(self.bar)
+        body.addWidget(self.commandCard)
 
         self.grid = QueueList(self)
         self.grid.set_selectable(True)  # 队列页常开多选
-        layout.addWidget(self.grid, 1)
+        body.addWidget(self.grid, 1)
 
         self.emptyLabel = BodyLabel(
             "队列为空\n可在「表情包」「收藏集」页多选后加入，或从包详情页点击「加入下载」", self
         )
         self.emptyLabel.setTextColor(*SECONDARY_TEXT)
         self.emptyLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.emptyLabel, 1)
-
-        self.statusLabel = BodyLabel("", self)
-        self.statusLabel.setTextColor(*SECONDARY_TEXT)
-        self.statusLabel.hide()
-        layout.addWidget(self.statusLabel)
-
-        self.bar = ProgressBar(self)
-        self.bar.setFixedHeight(8)
-        self.bar.hide()
-        layout.addWidget(self.bar)
+        body.addWidget(self.emptyLabel, 1)
 
         self.selectAllBtn.clicked.connect(self._select_all)
         self.deleteBtn.clicked.connect(self._remove_selected)
