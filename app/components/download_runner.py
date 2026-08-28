@@ -239,7 +239,8 @@ def download_collection_batch(
       （biliemoji 的 download_collection 不转发代理给内部 Downloader）。
     - 每个收藏集先 certain_lottery_typed 取全量（准备阶段 on_progress(i, n, None)）；
       单个失败（捕获 Exception）合成 FAILED 结果后继续，不中断整批。
-    - 目录 dest / sanitize_filename(收藏集名)；图片 {名}.png、视频 {名}.mp4。
+    - 目录 collection_download_dir(summary)（按搜索结果名，与卡片徽标判定一致）；
+      图片 {名}.png、视频 {名}.mp4。
     """
     max_workers = cfg.max_workers.value if max_workers is None else max_workers
     proxies = parse_proxy(cfg.proxy.value)
@@ -278,7 +279,10 @@ def download_collection_batch(
             )
             continue
 
-        folder = dest / sanitize_filename(coll.name)
+        # 目录名一律走 collection_download_dir(summary)：搜索结果卡片只有 summary，
+        # 若用 coll.name（certain_lottery_typed 取回的收藏集名，常与 summary.name 不同）
+        # 命名，卡片就永远判不出「已下载」
+        folder = collection_download_dir(summary)
         for item in coll.item_list:
             name = sanitize_filename(item.card_name or "unknown")
             if mode in ("image", "both") and item.card_img_download:

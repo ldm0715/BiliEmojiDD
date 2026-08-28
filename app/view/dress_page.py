@@ -8,10 +8,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
-    QListWidget,
     QListWidgetItem,
     QStackedWidget,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -20,22 +18,27 @@ from qfluentwidgets import (
     CaptionLabel,
     CheckBox,
     ComboBox,
+    FluentIcon,
+    InfoBadge,
     InfoBarPosition,
+    ListWidget,
     PrimaryPushButton,
     ProgressBar,
     PushButton,
     SearchLineEdit,
     StrongBodyLabel,
+    TransparentPushButton,
 )
 
 from app.common.config import cfg
 from app.common.exception import show_bili_error
 from app.common.notify import notify_info, notify_success, notify_warning
 from app.common.proxy import parse_proxy
-from app.common.theme import ORANGE_TEXT, SECONDARY_TEXT
+from app.common.theme import SECONDARY_TEXT
 from app.components.download_queue import download_queue
 from app.components.download_runner import (
     collection_download_dir,
+    download_collection_batch,
     downloaded_exists,
     start_download,
 )
@@ -144,22 +147,15 @@ class DressPage(QWidget):
         layout.addWidget(self.detailGrid, 1)
 
         # 视频区：可折叠（默认收起），点标题展开
-        self.videoToggle = QToolButton(self.detailPage)
-        self.videoToggle.setText("视频内容")
-        self.videoToggle.setArrowType(Qt.ArrowType.RightArrow)
-        self.videoToggle.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        self.videoToggle = TransparentPushButton(
+            FluentIcon.CHEVRON_RIGHT, "视频内容", self.detailPage
         )
-        self.videoToggle.setAutoRaise(True)
         self.videoToggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.videoToggle.setStyleSheet(
-            "QToolButton { border: none; font-weight: 600; padding: 2px 4px; }"
-        )
         self.videoToggle.clicked.connect(self._toggle_video)
         self.videoToggle.hide()
-        layout.addWidget(self.videoToggle)
+        layout.addWidget(self.videoToggle, 0, Qt.AlignmentFlag.AlignLeft)
 
-        self.videoList = QListWidget(self.detailPage)
+        self.videoList = ListWidget(self.detailPage)
         self.videoList.setMaximumHeight(150)
         self.videoList.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.videoList.hide()
@@ -173,8 +169,7 @@ class DressPage(QWidget):
         self.modeCombo.addItem("动态视频", userData="video")
         self.modeCombo.addItem("图片 + 视频", userData="both")
         self.modeCombo.setCurrentIndex(2)
-        self.downloadedLabel = CaptionLabel("已下载过", self.detailPage)
-        self.downloadedLabel.setTextColor(*ORANGE_TEXT)
+        self.downloadedLabel = InfoBadge.success("已下载", self.detailPage)
         self.downloadedLabel.hide()
         self.queueBtn = PushButton("加入下载", self.detailPage)
         self.queueBtn.setEnabled(False)
@@ -260,7 +255,7 @@ class DressPage(QWidget):
         self._detail_items = []
         self.detailGrid.set_items([])
         self.videoToggle.hide()
-        self.videoToggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.videoToggle.setIcon(FluentIcon.CHEVRON_RIGHT)
         self.videoList.clear()
         self.videoList.hide()
         self.detailBtn.setEnabled(False)
@@ -295,7 +290,7 @@ class DressPage(QWidget):
             self.videoList.addItem(row)
         if videos:
             self.videoToggle.setText(f"视频内容（{len(videos)} 个）")
-            self.videoToggle.setArrowType(Qt.ArrowType.RightArrow)
+            self.videoToggle.setIcon(FluentIcon.CHEVRON_RIGHT)
             self.videoToggle.show()
         else:
             self.videoToggle.hide()
@@ -305,15 +300,23 @@ class DressPage(QWidget):
         )
         self.detailBtn.setEnabled(True)
         self._sync_queue_btn()
-        self.downloadedLabel.setVisible(
-            downloaded_exists(collection_download_dir(collection))
-        )
+        self._refresh_downloaded(collection)
+
+    def _refresh_downloaded(self, collection=None) -> None:
+        """已下载判定：新下载按 summary 名建目录（与卡片徽标一致），
+        旧版本按 certain_lottery_typed 取回的收藏集名建目录，两者都认。"""
+        folders = []
+        if self._detail_summary is not None:
+            folders.append(collection_download_dir(self._detail_summary))
+        if collection is not None:
+            folders.append(collection_download_dir(collection))
+        self.downloadedLabel.setVisible(any(downloaded_exists(f) for f in folders))
 
     def _toggle_video(self) -> None:
         show = not self.videoList.isVisible()
         self.videoList.setVisible(show)
-        self.videoToggle.setArrowType(
-            Qt.ArrowType.DownArrow if show else Qt.ArrowType.RightArrow
+        self.videoToggle.setIcon(
+            FluentIcon.CHEVRON_DOWN_MED if show else FluentIcon.CHEVRON_RIGHT
         )
 
     # ---- 图片查看器 ----
@@ -385,18 +388,17 @@ class DressPage(QWidget):
             )
 
     def _on_detail_download(self) -> None:
-        if self._detail is None:
+        summary = self._detail_summary
+        if summary is None:
             return
-        act_id, lottery_id, _ = self._detail
         mode = self.modeCombo.currentData()
         self.detailBtn.setEnabled(False)
 
+        # 走 download_collection_batch 而不是 Dress.download_collection：
+        # 目录名与批量下载/卡片徽标统一（summary 名），且显式传 proxies
         def task(on_progress=None):
-            return Dress(
-                cookie=cfg.cookie.value, proxies=parse_proxy(cfg.proxy.value)
-            ).download_collection(
-                act_id,
-                lottery_id,
+            return download_collection_batch(
+                [summary],
                 Path(cfg.download_dir.value),
                 mode=mode,
                 max_workers=cfg.max_workers.value,
@@ -406,9 +408,13 @@ class DressPage(QWidget):
         started = start_download(
             task,
             self.detailBar,
-            on_finished=lambda: self.detailBtn.setEnabled(True),
+            on_finished=self._on_detail_download_finished,
             parent=self.detailPage,
         )
         if not started:
             # 目录不可用：start_download 未启动任务、不会触发 finished，手动恢复
-            self.detailBtn.setEnabled(True)
+            self._on_detail_download_finished()
+
+    def _on_detail_download_finished(self) -> None:
+        self.detailBtn.setEnabled(True)
+        self._refresh_downloaded()

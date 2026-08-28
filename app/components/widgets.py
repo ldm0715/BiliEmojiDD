@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListView,
-    QListWidget,
     QListWidgetItem,
     QPushButton,
     QSizePolicy,
@@ -20,18 +19,30 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import (
     CaptionLabel,
     CheckBox,
+    InfoBadge,
+    ListWidget,
     StrongBodyLabel,
+    ToolTipFilter,
+    ToolTipPosition,
 )
 from qfluentwidgets.common.style_sheet import ThemeColor
 
 from app.common.signal_bus import signal_bus
 from app.common.theme import ORANGE_TEXT, SECONDARY_TEXT, bind_theme
 from app.components.download_queue import item_kind
+from app.components.download_runner import (
+    collection_download_dir,
+    downloaded_exists,
+    package_download_dir,
+)
 from app.components.dress_helpers import category_name, is_collection
 from app.components.thumb import thumb_manager
 
 _PACKAGE_CELL = QSize(160, 160)
 _PACKAGE_ICON = QSize(96, 96)
+_CARD_GUTTER = 8  # 单元格宽度预留量，保证整行不换行溢出
+_SEL_INSET = 4  # 选中高亮相对卡片边缘的内缩，相邻卡片之间由此形成间隙
+_BADGE_MARGIN = 6  # 「已下载」徽标距卡片右上角的边距
 
 
 def _package_cover_url(pkg):
@@ -123,7 +134,7 @@ class PackageCard(QWidget):
     """表情包卡片：图片按钮（撑满）+ 居中文字 + 右上角勾选框 + 选中背景。
 
     用布局自适应单元格尺寸；图片用 QPushButton(setFlat=True) 点击整图触发勾选；
-    勾选框 setGeometry 钉在图片右上角 + raise_()；toggled 同步整卡背景色。
+    勾选框 setGeometry 钉在图片左上角 + raise_()（右上角是「已下载」徽标）；toggled 同步整卡背景色。
     点击卡片：多选态切换勾选，非多选态发 clicked。
     """
 
@@ -177,15 +188,33 @@ class PackageCard(QWidget):
         self.checkBox.toggled.connect(self._on_toggled)
         self.checkBox.raise_()
 
+        # 「已下载」徽标：钉右上角，勾选框在左上角，两者可同时显示
+        self._downloaded = downloaded_exists(package_download_dir(pkg))
+        self.downloadedBadge = InfoBadge.success("已下载", self)
+        self.downloadedBadge.setVisible(self._downloaded)
+
         self._accent = ThemeColor.PRIMARY.color()
         self._apply_bg(False)
         bind_theme(self, self._apply_theme)
         self._pin_checkbox()
 
+    def _pin_badge(self) -> None:
+        b = self.downloadedBadge
+        b.adjustSize()
+        b.move(self.width() - b.width() - _BADGE_MARGIN, _BADGE_MARGIN)
+        b.raise_()
+
+    def refresh_downloaded(self) -> None:
+        """重新检查目标目录（下载完成后调用）。"""
+        self._downloaded = downloaded_exists(package_download_dir(self.pkg))
+        self.downloadedBadge.setVisible(self._downloaded)
+        self._pin_badge()
+
     def _pin_checkbox(self) -> None:
+        # 钉在图片左上角：右上角留给「已下载」徽标，两者同时显示不打架
         img = self.imageBtn.geometry()
         self.checkBox.setGeometry(
-            img.right() - self._CHECK_SIZE - 4,
+            img.left() + 4,
             img.top() + 4,
             self._CHECK_SIZE,
             self._CHECK_SIZE,
@@ -195,6 +224,7 @@ class PackageCard(QWidget):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._pin_checkbox()
+        self._pin_badge()
         self._apply_pixmap()
 
     def set_selectable(self, selectable: bool) -> None:
@@ -248,13 +278,19 @@ class PackageCard(QWidget):
 
     def _apply_bg(self, checked: bool) -> None:
         # 类选择器限定自身：避免通用 * 规则把背景级联到子 label（文字区整块上色）
+        # margin 让高亮从卡片边缘内缩：QListView 在 gridSize 模式下把首列卡片右移
+        # 一格、其余列不移，卡片自身留不出均匀间隙，只能内缩背景来分隔相邻卡片
         if self._selectable and checked:
             a = self._accent
             self.setStyleSheet(
-                f"PackageCard {{ background-color: rgba({a.red()}, {a.green()}, {a.blue()}, 70); }}"
+                f"PackageCard {{ background-color: rgba({a.red()}, {a.green()}, {a.blue()}, 70);"
+                f" margin: {_SEL_INSET}px; border-radius: 6px; }}"
             )
         else:
-            self.setStyleSheet("PackageCard { background-color: transparent; }")
+            self.setStyleSheet(
+                f"PackageCard {{ background-color: transparent;"
+                f" margin: {_SEL_INSET}px; }}"
+            )
 
     def mousePressEvent(self, event) -> None:
         # 图片区由 imageBtn 处理；文字区点击同样切换
@@ -267,8 +303,12 @@ class PackageCard(QWidget):
         super().mousePressEvent(event)
 
 
-class _CardGridBase(QListWidget):
-    """QListWidget + setItemWidget 网格基类：懒加载缩略图 + 多选 API + 动态单元格。
+class _CardGridBase(ListWidget):
+    """qfluentwidgets ListWidget + setItemWidget 网格基类：懒加载缩略图 + 多选 API + 动态单元格。
+
+    基类用组件库的 `ListWidget`（不是裸 QListWidget）：它在 `ListBase.__init__` 里
+    `FluentStyleSheet.LIST_VIEW.apply(self)` 把自己注册进 styleSheetManager，
+    每次 setTheme 都会被 updateStyleSheet 重刷 QSS —— 容器与滚动条自动跟随主题。
 
     子类约定：
       _card_class     卡片类，构造签名 (item, parent)，暴露 .item / set_selectable /
@@ -293,7 +333,9 @@ class _CardGridBase(QListWidget):
         self.setUniformItemSizes(True)
         self.setMovement(QListView.Movement.Static)
         self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.setSpacing(8)
+        # spacing 在 gridSize 模式下只把第 0 项右移一格间距、步进却仍是
+        # gridSize.width() —— 头两列会贴死。间隙改由 _CARD_GUTTER 直接做进单元格。
+        self.setSpacing(0)
         self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self._selectable = False
         self._updating = False
@@ -428,7 +470,7 @@ class _CardGridBase(QListWidget):
 
 
 class PackageGrid(_CardGridBase):
-    """表情包卡片网格（旧 API 包装）：QListWidget + setItemWidget 挂载 PackageCard。
+    """表情包卡片网格（旧 API 包装）：ListWidget + setItemWidget 挂载 PackageCard。
 
     只对可视区域的项目请求缩略图（懒加载）。
     多选态：卡片右上角勾选框 + 选中遮罩，点击切换勾选。
@@ -448,12 +490,14 @@ class PackageGrid(_CardGridBase):
         return _package_cover_url(pkg)
 
     def _cell_size(self) -> QSize:
-        # 与 DressGrid 同款：按视口算列数（上限 8），正方形卡片尽量填满整行
+        # 与 DressGrid 同款：按视口算列数（上限 8），正方形卡片填满整行
+        # 注意：setGridSize 生效后 QListView 忽略 spacing()，步进就是 gridSize.width()，
+        # 所以这里按 vw // n 均分整行；卡片自身的 contentsMargins 充当间隙。
         vw = self.viewport().width()
         if vw <= 0:
             vw = self._min_cell.width() * 5
-        n = min(8, max(1, vw // (self._min_cell.width() + self.spacing())))
-        w = max(self._min_cell.width(), (vw - self.spacing() * (n - 1)) // n)
+        n = min(8, max(1, vw // (self._min_cell.width() + _CARD_GUTTER)))
+        w = max(self._min_cell.width(), (vw - _CARD_GUTTER) // n)
         return QSize(w, w)
 
     def set_packages(self, packages) -> None:
@@ -485,12 +529,12 @@ class EmojiGrid(_CardGridBase):
         return item[1] if isinstance(item, tuple) else item.url
 
     def _cell_size(self) -> QSize:
-        # 与 DressGrid 同款：按视口算列数（上限 8），正方形图标 + 底部文字，尽量填满整行
+        # 与 DressGrid 同款：按视口算列数（上限 8），正方形图标 + 底部文字，填满整行
         vw = self.viewport().width()
         if vw <= 0:
             vw = self._min_cell.width() * 6
-        n = min(8, max(1, vw // (self._min_cell.width() + self.spacing())))
-        w = max(self._min_cell.width(), (vw - self.spacing() * (n - 1)) // n)
+        n = min(8, max(1, vw // (self._min_cell.width() + _CARD_GUTTER)))
+        w = max(self._min_cell.width(), (vw - _CARD_GUTTER) // n)
         return QSize(w, w + 36)
 
     def items(self) -> list[tuple[str, str]]:
@@ -517,7 +561,8 @@ class DressCard(QWidget):
     clicked = Signal(object)  # DressCollectionSummary
     toggled = Signal(object, bool)
 
-    _TEXT_H = 56  # 名称+徽标+边距+间距 的估算高度
+    _NAME_H = 40  # 名称区固定两行高（StrongBodyLabel 14pt 行高约 20）
+    _TEXT_H = 76  # 名称两行 + 徽标 + 边距 + 间距 的估算高度
     _POSTER_RATIO = 4 / 3  # 海报 高/宽 = 4/3（3:4 竖版）
     _CHECK_SIZE = 20
     _MIN_WIDTH = 120
@@ -551,8 +596,14 @@ class DressCard(QWidget):
         layout.addWidget(self.imageBtn, 1)
 
         self.nameLabel = StrongBodyLabel(summary.name or "未命名", self)
+        # 长名换行（最多两行），并挂 tooltip 兜底完整名称——不换行的 QLabel 会把
+        # 超长文字直接裁掉且不加省略号，用户根本看不到原文
+        self.nameLabel.setWordWrap(True)
         self.nameLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.nameLabel.setFixedHeight(self._NAME_H)
         self.nameLabel.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setToolTip(summary.name or "未命名")
+        self.installEventFilter(ToolTipFilter(self, 500, ToolTipPosition.TOP))
         layout.addWidget(self.nameLabel, 0, Qt.AlignmentFlag.AlignHCenter)
 
         self.badgeLabel = CaptionLabel(category_name(summary), self)
@@ -569,7 +620,24 @@ class DressCard(QWidget):
         self.checkBox.toggled.connect(self._on_toggled)
         self.checkBox.raise_()
 
+        # 「已下载」徽标：钉右上角，勾选框在左上角，两者可同时显示
+        self._downloaded = downloaded_exists(collection_download_dir(summary))
+        self.downloadedBadge = InfoBadge.success("已下载", self)
+        self.downloadedBadge.setVisible(self._downloaded)
+
         bind_theme(self, self._apply_theme)
+
+    def _pin_badge(self) -> None:
+        b = self.downloadedBadge
+        b.adjustSize()
+        b.move(self.width() - b.width() - _BADGE_MARGIN, _BADGE_MARGIN)
+        b.raise_()
+
+    def refresh_downloaded(self) -> None:
+        """重新检查目标目录（下载完成后调用）。"""
+        self._downloaded = downloaded_exists(collection_download_dir(self.summary))
+        self.downloadedBadge.setVisible(self._downloaded)
+        self._pin_badge()
 
     # ---- 主题 ----
 
@@ -587,14 +655,15 @@ class DressCard(QWidget):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        # 勾选框钉在卡片右上角（海报区右上）
+        # 勾选框钉在卡片左上角：右上角留给「已下载」徽标，两者同时显示不打架
         self.checkBox.setGeometry(
-            self.width() - self._CHECK_SIZE - 8,
+            8,
             8,
             self._CHECK_SIZE,
             self._CHECK_SIZE,
         )
         self.checkBox.raise_()
+        self._pin_badge()
         self._apply_pixmap()
 
     # ---- 多选 API ----
@@ -624,13 +693,19 @@ class DressCard(QWidget):
 
     def _apply_bg(self, checked: bool) -> None:
         # 类选择器限定自身：避免通用 * 规则把背景级联到子 label（文字区整块上色）
+        # margin 让高亮从卡片边缘内缩：QListView 在 gridSize 模式下把首列卡片右移
+        # 一格、其余列不移，卡片自身留不出均匀间隙，只能内缩背景来分隔相邻卡片
         if self._selectable and checked:
             a = self._accent
             self.setStyleSheet(
-                f"DressCard {{ background-color: rgba({a.red()}, {a.green()}, {a.blue()}, 70); }}"
+                f"DressCard {{ background-color: rgba({a.red()}, {a.green()}, {a.blue()}, 70);"
+                f" margin: {_SEL_INSET}px; border-radius: 6px; }}"
             )
         else:
-            self.setStyleSheet("DressCard { background-color: transparent; }")
+            self.setStyleSheet(
+                f"DressCard {{ background-color: transparent;"
+                f" margin: {_SEL_INSET}px; }}"
+            )
 
     def mousePressEvent(self, event) -> None:
         # 图片区由 imageBtn 处理；文字/空白区点击同样切换
@@ -681,11 +756,11 @@ class DressGrid(_CardGridBase):
         return summary.image_cover
 
     def _cell_size(self) -> QSize:
-        # 恰好 4 列：单元格宽 = (视口宽 - 3*间距) // 4
+        # 恰好 4 列：单元格宽 = 视口宽 // 4（gridSize 生效后 spacing 不参与步进）
         vw = self.viewport().width()
         if vw <= 0:
             vw = self._min_cell.width() * 4
-        w = max(self._min_cell.width(), (vw - self.spacing() * 3) // 4)
+        w = max(self._min_cell.width(), (vw - _CARD_GUTTER) // 4)
         h = round(w * DressCard._POSTER_RATIO) + DressCard._TEXT_H
         return QSize(w, h)
 
@@ -809,28 +884,38 @@ class DressDetailGrid(_CardGridBase):
         return None
 
     def _cell_size(self) -> QSize:
-        # 选「能塞进视口、面积最大」的列数：填满区域且尽量大
+        # 选「能塞进视口、图片最大」的列数，单元格再按整行均分铺满。
+        # 两个关键点：
+        #  1. setGridSize 生效后 QListView 忽略 spacing()，步进即 gridSize.width()，
+        #     且换行判据是 c*cellW > vw-1，所以按 (vw-1)/c 均分；
+        #  2. 图片受高度限制被压窄时，单元格仍取满整份宽度——多出来的宽度变成每张
+        #     图两侧的均匀留白（QPushButton 居中画图标），而不是全堆在最右侧。
         vw = self.viewport().width()
         vh = self.viewport().height()
         n = self.count()
         if vw <= 0 or n <= 0:
             return self._min_cell
+        # 列数上限放开到「视口最多塞下几个最小卡」，卡死 8 列会在右侧留下大片空白
+        max_cols = min(n, max(1, vw // self._min_cell.width()))
         best = None
-        for c in range(1, min(n, 8) + 1):
+        for c in range(1, max_cols + 1):
             rows = (n + c - 1) // c
-            cell_w = (vw - self.spacing() * (c - 1)) / c
-            icon_h = (vh - self.spacing() * (rows - 1)) / rows - DetailCard._TEXT_H
+            share_w = (vw - _CARD_GUTTER) / c  # 该列数下每格能分到的宽度
+            icon_h = vh / rows - DetailCard._TEXT_H
             if icon_h <= 0:
                 continue
-            # 竖版 4:3（高/宽）→ 图标宽 = 高 * 3/4
-            icon_w = icon_h * (3 / 4)
-            cell_w = min(cell_w, icon_w)
-            cell_h = cell_w * (4 / 3) + DetailCard._TEXT_H
-            if cell_w < self._min_cell.width() or cell_h < self._min_cell.height():
+            # 竖版 4:3（高/宽）→ 图片宽 = 高 * 3/4，再受每格宽度上限
+            img_w = min(share_w, icon_h * (3 / 4))
+            img_h = img_w * (4 / 3)
+            if img_w < self._min_cell.width():
                 continue
-            area = cell_w * cell_h
-            if best is None or area > best[2]:
-                best = (cell_w, cell_h, area)
+            cell_h = img_h + DetailCard._TEXT_H
+            if cell_h < self._min_cell.height():
+                continue
+            area = img_w * img_h  # 以「图片」面积评分，不含填充留白
+            # >= 让并列面积时取更多列（同样大小下把整行铺得更满）
+            if best is None or area >= best[2]:
+                best = (share_w, cell_h, area)
         if best is None:
             return self._min_cell
         return QSize(int(best[0]), int(best[1]))
@@ -976,13 +1061,19 @@ class QueueCard(QWidget):
 
     def _apply_bg(self, checked: bool) -> None:
         # 类选择器限定自身：避免通用 * 规则把背景级联到子 label（文字区整块上色）
+        # margin 让高亮从卡片边缘内缩：QListView 在 gridSize 模式下把首列卡片右移
+        # 一格、其余列不移，卡片自身留不出均匀间隙，只能内缩背景来分隔相邻卡片
         if self._selectable and checked:
             a = self._accent
             self.setStyleSheet(
-                f"QueueCard {{ background-color: rgba({a.red()}, {a.green()}, {a.blue()}, 70); }}"
+                f"QueueCard {{ background-color: rgba({a.red()}, {a.green()}, {a.blue()}, 70);"
+                f" margin: {_SEL_INSET}px; border-radius: 6px; }}"
             )
         else:
-            self.setStyleSheet("QueueCard { background-color: transparent; }")
+            self.setStyleSheet(
+                f"QueueCard {{ background-color: transparent;"
+                f" margin: {_SEL_INSET}px; }}"
+            )
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -1035,15 +1126,15 @@ class QueueList(_CardGridBase):
 
     def _cell_size(self) -> QSize:
         # 响应式列数：可用宽度放得下两列（各至少 _min_cell 宽）→ 两列，否则单列铺满。
-        # 两列 w=(vw-spacing)//2、单列 w=vw-spacing，配合 QListView 的 gridSize+spacing
-        # 排布，数学上保证不横向溢出（内容宽度 ≤ 视口宽）。
+        # setGridSize 生效后 QListView 忽略 spacing()，步进即 gridSize.width()，
+        # 所以直接均分视口宽：两列 vw//2、单列 vw，数学上不横向溢出。
         vw = self.viewport().width()
         if vw <= 0:
-            vw = self._min_cell.width() * 2 + self.spacing()
-        if vw >= 2 * self._min_cell.width() + self.spacing():
-            w = (vw - self.spacing()) // 2
+            vw = self._min_cell.width() * 2
+        if vw >= 2 * self._min_cell.width():
+            w = (vw - _CARD_GUTTER) // 2
         else:
-            w = vw - self.spacing()
+            w = vw - _CARD_GUTTER
         return QSize(max(1, w), self._min_cell.height())
 
     def set_items(self, items) -> None:

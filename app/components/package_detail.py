@@ -9,8 +9,8 @@ from pathlib import Path
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
-    CaptionLabel,
     CheckBox,
+    InfoBadge,
     InfoBarPosition,
     PrimaryPushButton,
     ProgressBar,
@@ -20,7 +20,7 @@ from qfluentwidgets import (
 
 from app.common.config import cfg
 from app.common.notify import notify_info, notify_success
-from app.common.theme import ORANGE_TEXT, SECONDARY_TEXT
+from app.common.theme import SECONDARY_TEXT
 from app.components.download_queue import download_queue
 from app.components.download_runner import (
     download_package_batch,
@@ -56,8 +56,7 @@ class PackageDetailView(QWidget):
         download_row = QHBoxLayout()
         self.gifCheck = CheckBox("下载动图 (GIF)", self)
         self.gifCheck.setChecked(cfg.default_gif.value)
-        self.downloadedLabel = CaptionLabel("已下载过", self)
-        self.downloadedLabel.setTextColor(*ORANGE_TEXT)
+        self.downloadedLabel = InfoBadge.success("已下载", self)
         self.downloadedLabel.hide()
         self.queueBtn = PushButton("加入下载", self)
         self.queueBtn.setEnabled(False)

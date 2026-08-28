@@ -7,7 +7,7 @@ from qfluentwidgets import (
     FluentWindow,
     MessageBox,
     NavigationItemPosition,
-    NavigationToolButton,
+    NavigationPushButton,
     Theme,
     qconfig,
     setTheme,
@@ -45,11 +45,13 @@ class MainWindow(FluentWindow):
         self.addSubInterface(self.dressPage, FluentIcon.ALBUM, "收藏集")
         self.addSubInterface(self.downloadPage, FluentIcon.DOWNLOAD, "下载")
         # 主题切换按钮：插在设置之前 → 位于设置上方（bottom 布局先加的在上面）
-        self.themeNavBtn = NavigationToolButton(
-            FluentIcon.BRIGHTNESS, self.navigationInterface
+        # 用 NavigationPushButton（不是 NavigationToolButton）：侧栏展开时会显示文字
+        self.themeNavBtn = NavigationPushButton(
+            FluentIcon.BRIGHTNESS, "主题", False, self.navigationInterface
         )
         self.themeNavBtn.setToolTip("切换亮色 / 暗色主题")
-        self.themeNavBtn.clicked.connect(self._toggle_theme)
+        # 只经 addWidget(onClick=...) 接线：NavigationPanel._registerWidget 会把 onClick
+        # 连到 widget.clicked，这里再手动 connect 一次会让一次点击切两遍主题（等于没切）
         self.navigationInterface.addWidget(
             routeKey="themeToggle",
             widget=self.themeNavBtn,

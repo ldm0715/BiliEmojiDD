@@ -293,6 +293,48 @@ panel = win.navigationInterface.panel
 check(panel.expandWidth == 150, f"侧栏展开宽度 150（实际 {panel.expandWidth}）")
 win.close()
 
+print("== 9. 卡片「已下载」徽标 + 勾选框可同时显示（徽标右上、勾选框左上） ==")
+from app.components import widgets as widgets_mod
+
+badge_tmp = Path(tempfile.mkdtemp(prefix="biliemoji_badge_"))
+done_folder = badge_tmp / "已下载的"
+done_folder.mkdir(parents=True, exist_ok=True)
+(done_folder / "a.png").write_bytes(b"x")
+orig_coll = widgets_mod.collection_download_dir
+orig_pkg = widgets_mod.package_download_dir
+try:
+    widgets_mod.collection_download_dir = lambda s: done_folder
+    widgets_mod.package_download_dir = lambda p: done_folder
+    for name, card in (
+        ("DressCard", widgets_mod.DressCard(_FakeSummary("已下载的"))),
+        ("PackageCard", widgets_mod.PackageCard(_Pkg(1))),
+    ):
+        card.setFixedSize(200, 260)
+        card.show()
+        app.processEvents()
+        check(card.downloadedBadge.isVisible(), f"{name}: 目录非空 → 显示「已下载」徽标")
+        card.set_selectable(True)
+        app.processEvents()
+        check(
+            card.downloadedBadge.isVisible() and card.checkBox.isVisible(),
+            f"{name}: 多选态下徽标与勾选框同时显示",
+        )
+        b = card.downloadedBadge.geometry()
+        c = card.checkBox.geometry()
+        check(
+            c.right() < b.left(),
+            f"{name}: 勾选框在左上({c.right()})、徽标在右上({b.left()})，互不遮挡",
+        )
+    widgets_mod.collection_download_dir = lambda s: badge_tmp / "不存在"
+    undone = widgets_mod.DressCard(_FakeSummary("没下过"))
+    undone.show()
+    app.processEvents()
+    check(not undone.downloadedBadge.isVisible(), "DressCard: 目录不存在 → 不显示徽标")
+finally:
+    shutil.rmtree(badge_tmp, ignore_errors=True)
+    widgets_mod.collection_download_dir = orig_coll
+    widgets_mod.package_download_dir = orig_pkg
+
 print()
 if FAILS:
     print(f"FAILED ({len(FAILS)}):")

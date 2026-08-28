@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from biliemoji import Emoji
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -34,6 +34,7 @@ from app.common.exception import show_bili_error
 from app.common.notify import notify_success, notify_warning
 from app.common.proxy import build_proxy, parse_proxy, proxy_env, split_proxy
 from app.common.signal_bus import signal_bus
+from app.common.theme import bind_theme
 from app.components.download_runner import open_in_explorer
 from app.components.task import run_task
 
@@ -281,6 +282,16 @@ class SettingPage(QWidget):
 
         self.themeCombo.currentIndexChanged.connect(self._on_theme_changed)
         signal_bus.configChanged.connect(self._sync_theme_combo)
+        # ComboBox 闭合态只 setText 不 setIcon（上游行为），须自己补；
+        # 且 FluentIcon 按调用瞬间的主题取黑/白 svg，主题切换后要重取
+        bind_theme(self, self._sync_theme_icon)
+
+    def _sync_theme_icon(self) -> None:
+        """把当前选中项的图标同步到下拉框闭合态（ComboBox 自身不做这件事）。"""
+        self.themeCombo.setIconSize(QSize(16, 16))
+        self.themeCombo.setIcon(
+            self.themeCombo.itemIcon(self.themeCombo.currentIndex())
+        )
 
     def _sync_theme_combo(self) -> None:
         """外部切换主题（侧栏按钮）后同步下拉框显示。"""
@@ -291,6 +302,7 @@ class SettingPage(QWidget):
         self.themeCombo.blockSignals(True)
         self.themeCombo.setCurrentIndex(index)
         self.themeCombo.blockSignals(False)
+        self._sync_theme_icon()  # 信号被屏蔽，图标得手动补
 
     def _on_theme_changed(self, index: int) -> None:
         theme = self.themeCombo.itemData(index)
@@ -299,3 +311,4 @@ class SettingPage(QWidget):
         # 先 setTheme 再存 cfg.theme：保证保存时 QFluentWidgets.ThemeMode 与应用主题一致
         setTheme(theme)
         qconfig.set(cfg.theme, theme)
+        self._sync_theme_icon()
