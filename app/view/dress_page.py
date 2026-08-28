@@ -33,6 +33,7 @@ from app.common.proxy import parse_proxy
 from app.components.download_queue import download_queue
 from app.components.download_runner import start_download
 from app.components.dress_helpers import dlc_ids, is_collection
+from app.components.image_viewer import show_image_viewer
 from app.components.task import run_task
 from app.components.widgets import DressDetailGrid, DressGrid
 
@@ -43,6 +44,7 @@ class DressPage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._detail = None  # (act_id, lottery_id, summary)
+        self._detail_items: list[tuple[str, str]] = []  # 详情图片 (name, url)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 12, 16, 16)
@@ -69,6 +71,7 @@ class DressPage(QWidget):
         self.addBtn.clicked.connect(self._add_to_queue)
         self.grid.summaryClicked.connect(self._open_detail)
         self.grid.selectionChanged.connect(self._update_select_label)
+        self.detailGrid.imageClicked.connect(self._open_image_viewer)
 
     # ---- 搜索页 ----
     def _build_search_page(self) -> None:
@@ -219,6 +222,7 @@ class DressPage(QWidget):
         self._detail = (act_id, lottery_id, summary)
         self.detailName.setText(summary.name or "收藏集")
         self.detailInfo.setText("")
+        self._detail_items = []
         self.detailGrid.set_items([])
         self.videoToggle.hide()
         self.videoToggle.setArrowType(Qt.ArrowType.RightArrow)
@@ -247,6 +251,7 @@ class DressPage(QWidget):
             for url in item.video_list:
                 videos.append((item.card_name or "", url))
         # 动态尺寸网格：卡片随视口/数量撑满区域
+        self._detail_items = items
         self.detailGrid.set_items(items)
         self.videoList.clear()
         for name, url in videos:
@@ -271,6 +276,12 @@ class DressPage(QWidget):
         self.videoToggle.setArrowType(
             Qt.ArrowType.DownArrow if show else Qt.ArrowType.RightArrow
         )
+
+    # ---- 图片查看器 ----
+    def _open_image_viewer(self, index: int) -> None:
+        if index < 0 or not self._detail_items:
+            return
+        show_image_viewer(self._detail_items, index, self.window())
 
     # ---- 多选加入下载队列 ----
     def _set_multi(self, on: bool) -> None:

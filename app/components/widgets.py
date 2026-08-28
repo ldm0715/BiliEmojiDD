@@ -1,6 +1,8 @@
 """可复用组件：表情缩略图网格、表情包卡片网格、收藏集卡片、下载队列卡片。"""
 from __future__ import annotations
 
+from functools import partial
+
 from PySide6.QtCore import QRect, QSize, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
@@ -40,7 +42,12 @@ def _package_cover_url(pkg):
 
 
 class EmojiCard(QWidget):
-    """单个表情卡片：图标（固定大小）+ 全名（独立文字组件，超长分行并滚动，不遮挡图标）。"""
+    """单个表情卡片：图标（固定大小）+ 全名（独立文字组件，超长分行并滚动，不遮挡图标）。
+
+    整卡可点（clicked 载荷为卡片自身），供详情页打开图片查看器。
+    """
+
+    clicked = Signal(object)  # EmojiCard 自身
 
     def __init__(
         self,
@@ -53,7 +60,9 @@ class EmojiCard(QWidget):
     ) -> None:
         super().__init__(parent)
         self.url = url
+        self.index = -1  # 由 EmojiGrid 填充，用于定位查看器初始图片
         self.setFixedWidth(width)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         icon_size = icon_size if icon_size is not None else QSize(72, 72)
 
         layout = QVBoxLayout(self)
@@ -89,9 +98,20 @@ class EmojiCard(QWidget):
             )
         )
 
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self)
+            return
+        super().mousePressEvent(event)
+
 
 class EmojiGrid(SmoothScrollArea):
-    """表情流式网格：每个表情一张卡片（图标 + 全名，超长自动换行）。"""
+    """表情流式网格：每个表情一张卡片（图标 + 全名，超长自动换行）。
+
+    点击任一卡片发 imageClicked(index)，索引对应 items() 返回的 (text, url) 列表。
+    """
+
+    imageClicked = Signal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -105,7 +125,12 @@ class EmojiGrid(SmoothScrollArea):
         self._container.setLayout(self._flow)
         self.setWidget(self._container)
         self._url_cards: dict[str, list[EmojiCard]] = {}
+        self._items: list[tuple[str, str]] = []
         signal_bus.thumbLoaded.connect(self._on_thumb_loaded)
+
+    def items(self) -> list[tuple[str, str]]:
+        """实际建卡的 (text, url) 列表（已过滤空 url），与 imageClicked 索引一致。"""
+        return self._items
 
     def set_emotes(
         self,
@@ -126,13 +151,18 @@ class EmojiGrid(SmoothScrollArea):
                 widget.setParent(None)
                 widget.deleteLater()
         self._url_cards.clear()
-        for text, url in items:
-            if not url:
-                continue
+        self._items = [(text or "", url) for text, url in items if url]
+        for index, (text, url) in enumerate(self._items):
             card = EmojiCard(text, url, icon_size=icon_size, width=width)
+            card.index = index
+            card.clicked.connect(self._on_card_clicked)
             self._flow.addWidget(card)
             self._url_cards.setdefault(url, []).append(card)
             thumb_manager.request(url)
+
+    def _on_card_clicked(self, card) -> None:
+        if card.index >= 0:
+            self.imageClicked.emit(card.index)
 
     def _on_thumb_loaded(self, url: str, pixmap) -> None:
         for card in self._url_cards.get(url, ()):
@@ -268,10 +298,12 @@ class _CardGridBase(QListWidget):
       _cover_url(item) 返回封面缩略图 URL（可 None）
       _cell_size()     返回当前单元格 QSize
       _min_cell        最小单元格 QSize
-    点击统一走 self.itemClicked(object)（载荷为 item），子类在 __init__ 转发到公开信号。
+    点击统一走 self.itemClicked(object)（载荷为 item）与 self.itemClickedAt(int, object)
+    （附带下标），子类在 __init__ 转发到公开信号。
     """
 
     itemClicked = Signal(object)  # 载荷为卡片对应的 item
+    itemClickedAt = Signal(int, object)  # (下标, item)：内容重复时也能定位
     selectionChanged = Signal()  # 勾选集合变化
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -288,6 +320,7 @@ class _CardGridBase(QListWidget):
         self._updating = False
         self._requested: set[str] = set()
         self._url_cards: dict[str, list] = {}
+        self._items: list = []
         self._last_cell: QSize | None = None
         signal_bus.thumbLoaded.connect(self._on_thumb_loaded)
 
@@ -298,13 +331,16 @@ class _CardGridBase(QListWidget):
         self._requested.clear()
         self._url_cards.clear()
         self.clear()
-        for it in items:
+        self._items = list(items)
+        for index, it in enumerate(self._items):
             url = self._cover_url(it)
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, url)
             card = self._card_class(it, self)
             card.set_selectable(self._selectable)
-            card.clicked.connect(self._emit_clicked)
+            # 用建卡时的下标做闭包：不能靠 item 身份反查，内容相同的载荷（如
+            # (name, url) 元组字面量）会被 CPython 常量折叠成同一个对象
+            card.clicked.connect(partial(self._emit_clicked, index))
             card.toggled.connect(self._on_card_toggled)
             self.addItem(item)
             self.setItemWidget(item, card)
@@ -338,8 +374,9 @@ class _CardGridBase(QListWidget):
 
     # ---- 信号转发 ----
 
-    def _emit_clicked(self, it) -> None:
+    def _emit_clicked(self, index: int, it) -> None:
         self.itemClicked.emit(it)
+        self.itemClickedAt.emit(index, it)
 
     def _on_card_toggled(self, it, checked: bool) -> None:
         if not self._updating:
@@ -629,7 +666,10 @@ class DressGrid(_CardGridBase):
 
 
 class DetailCard(QWidget):
-    """收藏集详情卡片：竖版图片（等比）+ 名称。尺寸由网格 set_cell 动态给定。"""
+    """收藏集详情卡片：竖版图片（等比）+ 名称。尺寸由网格 set_cell 动态给定。
+
+    整卡可点（clicked 载荷为 (name, url) 元组），供详情页打开图片查看器。
+    """
 
     clicked = Signal(object)
     toggled = Signal(object, bool)
@@ -653,9 +693,11 @@ class DetailCard(QWidget):
         self.imageBtn.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
+        self.imageBtn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.imageBtn.setStyleSheet(
             "QPushButton { background: rgba(128,128,128,0.12); border: none; }"
         )
+        self.imageBtn.clicked.connect(self._on_image_clicked)
         layout.addWidget(self.imageBtn, 1)
 
         self.nameLabel = QLabel(name or "", self)
@@ -674,7 +716,17 @@ class DetailCard(QWidget):
         super().resizeEvent(event)
         self._apply_pixmap()
 
-    # 网格基类契约：详情只展示，无需多选/点击
+    def _on_image_clicked(self) -> None:
+        self.clicked.emit(self.item)
+
+    def mousePressEvent(self, event) -> None:
+        # 图片区由 imageBtn 处理；文字区点击同样触发
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.item)
+            return
+        super().mousePressEvent(event)
+
+    # 网格基类契约：详情只展示，无需多选
     def set_selectable(self, on: bool) -> None:
         pass
 
@@ -708,13 +760,17 @@ class DressDetailGrid(_CardGridBase):
     """收藏集详情网格：竖版图片，卡片尺寸随视口/数量动态变化，尽量撑满区域。
 
     项目少时卡片放大填满，项目多时自动缩小；窗口缩放时 resizeEvent 重新计算。
+    点击任一卡片发 imageClicked(index)，索引对应 set_items 传入的列表。
     """
+
+    imageClicked = Signal(int)
 
     _card_class = DetailCard
     _min_cell = QSize(130, 200)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.itemClickedAt.connect(lambda i, _: self.imageClicked.emit(i))
 
     @staticmethod
     def _cover_url(item):

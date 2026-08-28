@@ -19,6 +19,7 @@ from app.common.config import cfg
 from app.common.notify import notify_info, notify_success
 from app.components.download_queue import download_queue
 from app.components.download_runner import download_package_batch, start_download
+from app.components.image_viewer import show_image_viewer
 from app.components.widgets import EmojiGrid
 
 
@@ -64,6 +65,13 @@ class PackageDetailView(QWidget):
 
         self.queueBtn.clicked.connect(self._on_add_to_queue)
         self.downloadBtn.clicked.connect(self._on_download)
+        self.grid.imageClicked.connect(self._open_image_viewer)
+
+    def _open_image_viewer(self, index: int) -> None:
+        items = self.grid.items()
+        if index < 0 or not items:
+            return
+        show_image_viewer(items, index, self.window())
 
     def set_package(self, pkg) -> None:
         """填充包信息与表情网格（pkg 需已含完整 emote 列表）。"""
