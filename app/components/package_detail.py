@@ -6,19 +6,28 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
+    BodyLabel,
+    CaptionLabel,
     CheckBox,
     InfoBarPosition,
     PrimaryPushButton,
     ProgressBar,
     PushButton,
+    StrongBodyLabel,
 )
 
 from app.common.config import cfg
 from app.common.notify import notify_info, notify_success
+from app.common.theme import ORANGE_TEXT, SECONDARY_TEXT
 from app.components.download_queue import download_queue
-from app.components.download_runner import download_package_batch, start_download
+from app.components.download_runner import (
+    download_package_batch,
+    downloaded_exists,
+    package_download_dir,
+    start_download,
+)
 from app.components.image_viewer import show_image_viewer
 from app.components.widgets import EmojiGrid
 
@@ -33,14 +42,13 @@ class PackageDetailView(QWidget):
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
 
-        self.nameLabel = QLabel("尚未选择表情包", self)
-        self.nameLabel.setStyleSheet("font-size: 16px; font-weight: 600;")
-        self.detailLabel = QLabel("", self)
-        self.detailLabel.setStyleSheet("color: gray;")
+        self.nameLabel = StrongBodyLabel("尚未选择表情包", self)
+        self.detailLabel = BodyLabel("", self)
+        self.detailLabel.setTextColor(*SECONDARY_TEXT)
         layout.addWidget(self.nameLabel)
         layout.addWidget(self.detailLabel)
 
-        layout.addWidget(QLabel("表情预览"))
+        layout.addWidget(BodyLabel("表情预览"))
 
         self.grid = EmojiGrid(self)
         layout.addWidget(self.grid, 1)
@@ -48,11 +56,15 @@ class PackageDetailView(QWidget):
         download_row = QHBoxLayout()
         self.gifCheck = CheckBox("下载动图 (GIF)", self)
         self.gifCheck.setChecked(cfg.default_gif.value)
+        self.downloadedLabel = CaptionLabel("已下载过", self)
+        self.downloadedLabel.setTextColor(*ORANGE_TEXT)
+        self.downloadedLabel.hide()
         self.queueBtn = PushButton("加入下载", self)
         self.queueBtn.setEnabled(False)
         self.downloadBtn = PrimaryPushButton("下载到本地", self)
         self.downloadBtn.setEnabled(False)
         download_row.addWidget(self.gifCheck)
+        download_row.addWidget(self.downloadedLabel)
         download_row.addStretch(1)
         download_row.addWidget(self.queueBtn)
         download_row.addWidget(self.downloadBtn)
@@ -66,6 +78,8 @@ class PackageDetailView(QWidget):
         self.queueBtn.clicked.connect(self._on_add_to_queue)
         self.downloadBtn.clicked.connect(self._on_download)
         self.grid.imageClicked.connect(self._open_image_viewer)
+        # 队列变化时同步「加入下载/已加入」按钮状态
+        download_queue.changed.connect(self._sync_queue_btn)
 
     def _open_image_viewer(self, index: int) -> None:
         items = self.grid.items()
@@ -88,7 +102,8 @@ class PackageDetailView(QWidget):
                 items.append((em.text or "", url))
         self.grid.set_emotes(items)
         self.downloadBtn.setEnabled(True)
-        self.queueBtn.setEnabled(True)
+        self._sync_queue_btn()
+        self._refresh_downloaded()
 
     def show_loading(self, name: str) -> None:
         """详情数据拉取中：清空旧内容并提示。"""
@@ -97,7 +112,9 @@ class PackageDetailView(QWidget):
         self.detailLabel.setText("")
         self.grid.set_emotes([])
         self.downloadBtn.setEnabled(False)
+        self.queueBtn.setText("加入下载")
         self.queueBtn.setEnabled(False)
+        self.downloadedLabel.hide()
 
     def clear(self) -> None:
         self._pkg = None
@@ -105,7 +122,9 @@ class PackageDetailView(QWidget):
         self.detailLabel.setText("")
         self.grid.set_emotes([])
         self.downloadBtn.setEnabled(False)
+        self.queueBtn.setText("加入下载")
         self.queueBtn.setEnabled(False)
+        self.downloadedLabel.hide()
 
     def _on_add_to_queue(self) -> None:
         if self._pkg is None:
@@ -153,6 +172,26 @@ class PackageDetailView(QWidget):
             self._restore_buttons()
 
     def _restore_buttons(self) -> None:
-        enabled = self._pkg is not None
-        self.downloadBtn.setEnabled(enabled)
-        self.queueBtn.setEnabled(enabled)
+        self.downloadBtn.setEnabled(self._pkg is not None)
+        self._sync_queue_btn()
+        self._refresh_downloaded()
+
+    def _sync_queue_btn(self) -> None:
+        """「加入下载 / 已加入」状态单一同步源：无包或已在队列 → 「已加入」禁用。"""
+        pkg = self._pkg
+        if pkg is None:
+            self.queueBtn.setText("加入下载")
+            self.queueBtn.setEnabled(False)
+        elif download_queue.contains(pkg):
+            self.queueBtn.setText("已加入")
+            self.queueBtn.setEnabled(False)
+        else:
+            self.queueBtn.setText("加入下载")
+            self.queueBtn.setEnabled(True)
+
+    def _refresh_downloaded(self) -> None:
+        """已下载状态：目标目录存在且非空即显示「已下载过」。"""
+        pkg = self._pkg
+        self.downloadedLabel.setVisible(
+            pkg is not None and downloaded_exists(package_download_dir(pkg))
+        )

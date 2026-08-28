@@ -41,14 +41,14 @@ check(grid.items() == [
     ("b", "https://x.invalid/b.png"),
     ("dup", "https://x.invalid/a.png"),
 ], f"items() 已过滤空 url（实际 {grid.items()}）")
-check(grid._flow.count() == 3, f"建了 3 张卡（实际 {grid._flow.count()}）")
+check(grid.count() == 3, f"建了 3 张卡（实际 {grid.count()}）")
 
-for i in range(grid._flow.count()):
-    card = grid._flow.itemAt(i).widget()  # itemAt 给的是 QWidgetItem（takeAt 才直接给 widget）
+for i in range(grid.count()):
+    card = grid.itemWidget(grid.item(i))
     card.clicked.emit(card)
 check(got == [0, 1, 2], f"点击各卡发出的索引（实际 {got}）")
 check(
-    all(grid.items()[i][1] == grid._flow.itemAt(i).widget().url for i in got),
+    all(grid.items()[i][1] == grid.itemWidget(grid.item(i)).url for i in got),
     "索引指向的 url 与卡片自身 url 一致",
 )
 

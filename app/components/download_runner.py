@@ -139,6 +139,22 @@ def _truncate(name: str, limit: int) -> str:
     return name if len(name) <= limit else name[:limit]
 
 
+def package_download_dir(pkg) -> Path:
+    """表情包下载目标目录（与 download_package_batch 命名完全一致）。"""
+    name = _truncate(sanitize_filename(pkg.text or f"package_{pkg.id}"), 60)
+    return Path(cfg.download_dir.value) / f"{name} [{pkg.id}]"
+
+
+def collection_download_dir(summary) -> Path:
+    """收藏集下载目标目录（与 download_collection_batch 命名一致）。"""
+    return Path(cfg.download_dir.value) / sanitize_filename(summary.name or "收藏集")
+
+
+def downloaded_exists(folder: Path) -> bool:
+    """目标目录已存在且非空 → 视为已下载过。"""
+    return folder.is_dir() and any(folder.iterdir())
+
+
 def download_package_batch(
     ids,
     dest,

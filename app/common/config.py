@@ -41,3 +41,6 @@ class AppConfig(QConfig):
 
 cfg = AppConfig()
 qconfig.load(str(APP_CONFIG_DIR / "config.json"), cfg)
+# 同步 qfluentwidgets 主题模式到应用配置，避免配置文件里残留的
+# QFluentWidgets.ThemeMode 覆盖应用当前主题（导致亮暗反色）
+qconfig.set(qconfig.themeMode, cfg.theme.value, save=False)

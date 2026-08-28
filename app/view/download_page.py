@@ -4,8 +4,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
+    BodyLabel,
+    CaptionLabel,
     InfoBarPosition,
     PrimaryPushButton,
     ProgressBar,
@@ -14,6 +16,7 @@ from qfluentwidgets import (
 
 from app.common.config import cfg
 from app.common.notify import notify_warning
+from app.common.theme import SECONDARY_TEXT
 from app.components.download_queue import download_queue, item_key
 from app.components.download_runner import download_mixed_batch, start_download
 from app.components.widgets import QueueList
@@ -31,8 +34,8 @@ class DownloadPage(QWidget):
         layout.setSpacing(12)
 
         header = QHBoxLayout()
-        self.countLabel = QLabel("共 0 个内容", self)
-        self.countLabel.setStyleSheet("color: gray;")
+        self.countLabel = CaptionLabel("共 0 个内容", self)
+        self.countLabel.setTextColor(*SECONDARY_TEXT)
         self.selectAllBtn = PushButton("全选", self)
         self.deleteBtn = PushButton("删除选中", self)
         self.clearBtn = PushButton("清空", self)
@@ -49,15 +52,15 @@ class DownloadPage(QWidget):
         self.grid.set_selectable(True)  # 队列页常开多选
         layout.addWidget(self.grid, 1)
 
-        self.emptyLabel = QLabel(
+        self.emptyLabel = BodyLabel(
             "队列为空\n可在「表情包」「收藏集」页多选后加入，或从包详情页点击「加入下载」", self
         )
+        self.emptyLabel.setTextColor(*SECONDARY_TEXT)
         self.emptyLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.emptyLabel.setStyleSheet("color: gray;")
         layout.addWidget(self.emptyLabel, 1)
 
-        self.statusLabel = QLabel("", self)
-        self.statusLabel.setStyleSheet("color: gray;")
+        self.statusLabel = BodyLabel("", self)
+        self.statusLabel.setTextColor(*SECONDARY_TEXT)
         self.statusLabel.hide()
         layout.addWidget(self.statusLabel)
 

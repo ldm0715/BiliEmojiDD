@@ -3,11 +3,10 @@ from __future__ import annotations
 
 from functools import partial
 
-from PySide6.QtCore import QRect, QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QListView,
@@ -18,10 +17,15 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from qfluentwidgets import CheckBox, FlowLayout, SmoothScrollArea
+from qfluentwidgets import (
+    CaptionLabel,
+    CheckBox,
+    StrongBodyLabel,
+)
 from qfluentwidgets.common.style_sheet import ThemeColor
 
 from app.common.signal_bus import signal_bus
+from app.common.theme import ORANGE_TEXT, SECONDARY_TEXT, bind_theme
 from app.components.download_queue import item_kind
 from app.components.dress_helpers import category_name, is_collection
 from app.components.thumb import thumb_manager
@@ -42,52 +46,62 @@ def _package_cover_url(pkg):
 
 
 class EmojiCard(QWidget):
-    """单个表情卡片：图标（固定大小）+ 全名（独立文字组件，超长分行并滚动，不遮挡图标）。
+    """单个表情卡片：图标（随单元格缩放）+ 全名（独立文字组件，超长分行，不遮挡图标）。
 
-    整卡可点（clicked 载荷为卡片自身），供详情页打开图片查看器。
+    复用 _CardGridBase 契约：整卡可点（clicked 载荷为卡片自身），供详情页打开图片查看器。
     """
 
     clicked = Signal(object)  # EmojiCard 自身
+    toggled = Signal(object, bool)  # 契约占位：表情不支持多选，永不触发
 
-    def __init__(
-        self,
-        text: str,
-        url: str,
-        parent: QWidget | None = None,
-        *,
-        icon_size: QSize | None = None,
-        width: int = 104,
-    ) -> None:
+    def __init__(self, item, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        text, url = item
         self.url = url
-        self.index = -1  # 由 EmojiGrid 填充，用于定位查看器初始图片
-        self.setFixedWidth(width)
+        self.item = item  # (text, url)
+        self.index = -1  # 由网格基类填充，用于定位查看器初始图片
+        self.setFixedWidth(104)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        icon_size = icon_size if icon_size is not None else QSize(72, 72)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 2)
         layout.setSpacing(2)
 
-        # 图标：独立区域，固定大小，永不被文字挤占
+        # 图标：独立区域，随单元格缩放，永不被文字挤占
         self.iconLabel = QLabel(self)
-        self.iconLabel.setFixedSize(icon_size)
+        self.iconLabel.setFixedSize(72, 72)
         self.iconLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.iconLabel.setStyleSheet("background: rgba(128,128,128,0.12);")
         layout.addWidget(self.iconLabel, 0, Qt.AlignmentFlag.AlignHCenter)
 
         # 文字：独立区域（图标正下方），按内容自适应高度，超长自动分行，不遮挡图标
-        self.textLabel = QLabel(text or "", self)
+        self.textLabel = CaptionLabel(text or "", self)
+        self.textLabel.setTextColor(*SECONDARY_TEXT)
         self.textLabel.setWordWrap(True)
-        self.textLabel.setFixedWidth(width - 8)
+        self.textLabel.setFixedWidth(96)
         self.textLabel.setAlignment(
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
         )
-        self.textLabel.setStyleSheet("font-size: 12px; color: #909090;")
         # 无文字时不占高度，卡片更紧凑
         if not (text or "").strip():
             self.textLabel.hide()
         layout.addWidget(self.textLabel, 0, Qt.AlignmentFlag.AlignHCenter)
+
+    def set_cell(self, size: QSize) -> None:
+        """按单元格尺寸重排：图标撑宽，文字宽度对齐。"""
+        self.setFixedSize(size)
+        icon = max(24, size.width() - 8)
+        self.iconLabel.setFixedSize(icon, icon)
+        self.textLabel.setFixedWidth(size.width() - 8)
+
+    def set_selectable(self, selectable: bool) -> None:
+        """契约占位：表情不支持多选。"""
+
+    def set_checked(self, checked: bool) -> None:
+        pass
+
+    def is_checked(self) -> bool:
+        return False
 
     def set_pixmap(self, pixmap) -> None:
         self.iconLabel.setPixmap(
@@ -105,84 +119,18 @@ class EmojiCard(QWidget):
         super().mousePressEvent(event)
 
 
-class EmojiGrid(SmoothScrollArea):
-    """表情流式网格：每个表情一张卡片（图标 + 全名，超长自动换行）。
-
-    点击任一卡片发 imageClicked(index)，索引对应 items() 返回的 (text, url) 列表。
-    """
-
-    imageClicked = Signal(int)
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWidgetResizable(True)
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self._container = QWidget(self)
-        self._flow = FlowLayout(self._container, needAni=False)
-        self._flow.setContentsMargins(0, 0, 0, 0)
-        self._flow.setVerticalSpacing(4)
-        self._flow.setHorizontalSpacing(4)
-        self._container.setLayout(self._flow)
-        self.setWidget(self._container)
-        self._url_cards: dict[str, list[EmojiCard]] = {}
-        self._items: list[tuple[str, str]] = []
-        signal_bus.thumbLoaded.connect(self._on_thumb_loaded)
-
-    def items(self) -> list[tuple[str, str]]:
-        """实际建卡的 (text, url) 列表（已过滤空 url），与 imageClicked 索引一致。"""
-        return self._items
-
-    def set_emotes(
-        self,
-        items: list[tuple[str, str]],
-        *,
-        icon_size: QSize | None = None,
-        width: int = 104,
-    ) -> None:
-        """items: [(text, url), ...]。url 为 None/空的行被跳过，不报错。
-
-        详情等场景可用 icon_size / width 放大卡片。
-        """
-        icon_size = icon_size if icon_size is not None else QSize(72, 72)
-        # FlowLayout.takeAt(index) 直接返回 widget
-        while self._flow.count():
-            widget = self._flow.takeAt(0)
-            if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
-        self._url_cards.clear()
-        self._items = [(text or "", url) for text, url in items if url]
-        for index, (text, url) in enumerate(self._items):
-            card = EmojiCard(text, url, icon_size=icon_size, width=width)
-            card.index = index
-            card.clicked.connect(self._on_card_clicked)
-            self._flow.addWidget(card)
-            self._url_cards.setdefault(url, []).append(card)
-            thumb_manager.request(url)
-
-    def _on_card_clicked(self, card) -> None:
-        if card.index >= 0:
-            self.imageClicked.emit(card.index)
-
-    def _on_thumb_loaded(self, url: str, pixmap) -> None:
-        for card in self._url_cards.get(url, ()):
-            card.set_pixmap(pixmap)
-
-
 class PackageCard(QWidget):
-    """表情包卡片：图片按钮 + 居中文字 + 右上角勾选框 + 选中背景。
+    """表情包卡片：图片按钮（撑满）+ 居中文字 + 右上角勾选框 + 选中背景。
 
-    容器不设 Layout；图片用 QPushButton(setFlat=True) 以便点击整图触发勾选；
-    文字 QLabel 居中且宽度对齐图片；勾选框 setGeometry 钉在右上角 + raise_()；
-    toggled 信号同步整卡背景色（半透明主题色）。点击卡片：多选态切换勾选，非多选态发 clicked。
+    用布局自适应单元格尺寸；图片用 QPushButton(setFlat=True) 点击整图触发勾选；
+    勾选框 setGeometry 钉在图片右上角 + raise_()；toggled 同步整卡背景色。
+    点击卡片：多选态切换勾选，非多选态发 clicked。
     """
 
     clicked = Signal(object)  # EmotePackage
     toggled = Signal(object, bool)  # (pkg, checked)
 
-    _CELL = QSize(160, 160)
-    _IMG = QRect(0, 0, 160, 116)
-    _TXT = QRect(0, 118, 160, 40)
+    _TEXT_H = 42  # 底部文字区估算高度
     _CHECK_SIZE = 20
 
     def __init__(self, pkg, parent: QWidget | None = None) -> None:
@@ -190,46 +138,64 @@ class PackageCard(QWidget):
         self.pkg = pkg
         self.item = pkg  # 网格基类约定：payload 统一叫 .item
         self._selectable = False
-        self.setFixedSize(self._CELL)
+        self._last_pixmap = None
+        self.setFixedSize(160, 160)
         # 普通 QWidget 需此属性才会绘制 stylesheet 的 background-color（选中背景）
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
 
-        # 图片按钮：flat、透明，点击整图触发
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 2)
+        layout.setSpacing(2)
+
+        # 图片按钮：flat、透明、撑满剩余空间，点击整图触发
+        # 注意：QPushButton 垂直 size policy 默认 Fixed，stretch 拉不撑，必须显式 Expanding
         self.imageBtn = QPushButton(self)
-        self.imageBtn.setGeometry(self._IMG)
         self.imageBtn.setFlat(True)
+        self.imageBtn.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         self.imageBtn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.imageBtn.setStyleSheet(
             "QPushButton { background: transparent; border: none; }"
         )
         self.imageBtn.clicked.connect(self._on_image_clicked)
+        layout.addWidget(self.imageBtn, 1)
 
         # 文字：居中，宽度对齐图片
-        self.textLabel = QLabel(self)
-        self.textLabel.setGeometry(self._TXT)
+        self.textLabel = CaptionLabel(self)
+        self.textLabel.setTextColor(*SECONDARY_TEXT)
         self.textLabel.setWordWrap(True)
         self.textLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.textLabel.setStyleSheet(
-            "color: gray; font-size: 12px; background: transparent; border: none;"
-        )
         self.textLabel.setText(f"{pkg.text or ('#' + str(pkg.id))}\nID: {pkg.id}")
         self.textLabel.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        layout.addWidget(self.textLabel, 0)
 
-        # 勾选框：右上角，置顶
+        # 勾选框：图片右上角，置顶
         self.checkBox = CheckBox(self)
         self.checkBox.setFixedSize(self._CHECK_SIZE, self._CHECK_SIZE)
-        self.checkBox.setGeometry(
-            self._IMG.right() - self._CHECK_SIZE - 4,
-            self._IMG.top() + 4,
-            self._CHECK_SIZE,
-            self._CHECK_SIZE,
-        )
-        self.checkBox.raise_()  # 置于图片按钮/文字之上
         self.checkBox.setVisible(False)
         self.checkBox.toggled.connect(self._on_toggled)
+        self.checkBox.raise_()
 
         self._accent = ThemeColor.PRIMARY.color()
         self._apply_bg(False)
+        bind_theme(self, self._apply_theme)
+        self._pin_checkbox()
+
+    def _pin_checkbox(self) -> None:
+        img = self.imageBtn.geometry()
+        self.checkBox.setGeometry(
+            img.right() - self._CHECK_SIZE - 4,
+            img.top() + 4,
+            self._CHECK_SIZE,
+            self._CHECK_SIZE,
+        )
+        self.checkBox.raise_()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._pin_checkbox()
+        self._apply_pixmap()
 
     def set_selectable(self, selectable: bool) -> None:
         self._selectable = bool(selectable)
@@ -245,18 +211,26 @@ class PackageCard(QWidget):
         return self.checkBox.isChecked()
 
     def set_cell(self, size: QSize) -> None:
-        # PackageGrid 固定单元格，尺寸在 __init__ 已固定
-        pass
+        self.setFixedSize(size)
 
     def set_pixmap(self, pixmap) -> None:
-        if pixmap is not None and not pixmap.isNull():
-            scaled = pixmap.scaled(
-                self._IMG.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            self.imageBtn.setIcon(QIcon(scaled))
-            self.imageBtn.setIconSize(scaled.size())
+        self._last_pixmap = pixmap
+        self._apply_pixmap()
+
+    def _apply_pixmap(self) -> None:
+        pm = self._last_pixmap
+        if pm is None or pm.isNull():
+            return
+        rect = self.imageBtn.rect()
+        if rect.isEmpty():
+            return
+        scaled = pm.scaled(
+            rect.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.imageBtn.setIcon(QIcon(scaled))
+        self.imageBtn.setIconSize(scaled.size())
 
     def _on_image_clicked(self) -> None:
         if self._selectable:
@@ -268,14 +242,19 @@ class PackageCard(QWidget):
         self._apply_bg(checked)
         self.toggled.emit(self.pkg, checked)
 
+    def _apply_theme(self) -> None:
+        self._accent = ThemeColor.PRIMARY.color()
+        self._apply_bg(self.checkBox.isChecked())
+
     def _apply_bg(self, checked: bool) -> None:
+        # 类选择器限定自身：避免通用 * 规则把背景级联到子 label（文字区整块上色）
         if self._selectable and checked:
             a = self._accent
             self.setStyleSheet(
-                f"background-color: rgba({a.red()}, {a.green()}, {a.blue()}, 70);"
+                f"PackageCard {{ background-color: rgba({a.red()}, {a.green()}, {a.blue()}, 70); }}"
             )
         else:
-            self.setStyleSheet("background-color: transparent;")
+            self.setStyleSheet("PackageCard { background-color: transparent; }")
 
     def mousePressEvent(self, event) -> None:
         # 图片区由 imageBtn 处理；文字区点击同样切换
@@ -323,6 +302,8 @@ class _CardGridBase(QListWidget):
         self._items: list = []
         self._last_cell: QSize | None = None
         signal_bus.thumbLoaded.connect(self._on_thumb_loaded)
+        # 垂直滚动条出现/消失会收窄视口，双列网格（QueueList）需随之重排，防横向溢出
+        self.verticalScrollBar().rangeChanged.connect(lambda *_: self._layout_items())
 
     # ---- 数据填充 ----
 
@@ -467,7 +448,13 @@ class PackageGrid(_CardGridBase):
         return _package_cover_url(pkg)
 
     def _cell_size(self) -> QSize:
-        return _PACKAGE_CELL
+        # 与 DressGrid 同款：按视口算列数（上限 8），正方形卡片尽量填满整行
+        vw = self.viewport().width()
+        if vw <= 0:
+            vw = self._min_cell.width() * 5
+        n = min(8, max(1, vw // (self._min_cell.width() + self.spacing())))
+        w = max(self._min_cell.width(), (vw - self.spacing() * (n - 1)) // n)
+        return QSize(w, w)
 
     def set_packages(self, packages) -> None:
         """packages：EmotePackage 列表。"""
@@ -475,6 +462,48 @@ class PackageGrid(_CardGridBase):
 
     def checked_packages(self) -> list:
         return self.checked_items()
+
+
+class EmojiGrid(_CardGridBase):
+    """表情网格：复用 _CardGridBase，卡片随视口宽度响应式填满（与收藏集网格一致）。
+
+    点击任一卡片发 imageClicked(index)，索引对应 items() 返回的 (text, url) 列表。
+    """
+
+    imageClicked = Signal(int)
+
+    _card_class = EmojiCard
+    _min_cell = QSize(72, 96)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._items: list[tuple[str, str]] = []
+        self.itemClickedAt.connect(self._emit_image)
+
+    @staticmethod
+    def _cover_url(item):
+        return item[1] if isinstance(item, tuple) else item.url
+
+    def _cell_size(self) -> QSize:
+        # 与 DressGrid 同款：按视口算列数（上限 8），正方形图标 + 底部文字，尽量填满整行
+        vw = self.viewport().width()
+        if vw <= 0:
+            vw = self._min_cell.width() * 6
+        n = min(8, max(1, vw // (self._min_cell.width() + self.spacing())))
+        w = max(self._min_cell.width(), (vw - self.spacing() * (n - 1)) // n)
+        return QSize(w, w + 36)
+
+    def items(self) -> list[tuple[str, str]]:
+        """实际建卡的 (text, url) 列表（已过滤空 url），与 imageClicked 索引一致。"""
+        return list(self._items)
+
+    def set_emotes(self, items) -> None:
+        """items: [(text, url), ...]。url 为 None/空的行被跳过，不报错。"""
+        self._items = [(text or "", url) for text, url in items if url]
+        self.set_cards(self._items)
+
+    def _emit_image(self, index: int, _card) -> None:
+        self.imageClicked.emit(index)
 
 
 class DressCard(QWidget):
@@ -521,24 +550,16 @@ class DressCard(QWidget):
         self.imageBtn.clicked.connect(self._on_image_clicked)
         layout.addWidget(self.imageBtn, 1)
 
-        self.nameLabel = QLabel(summary.name or "未命名", self)
-        self.nameLabel.setWordWrap(False)
+        self.nameLabel = StrongBodyLabel(summary.name or "未命名", self)
         self.nameLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.nameLabel.setStyleSheet(
-            "font-size: 13px; font-weight: 600; color: #444;"
-            "background: transparent; border: none;"
-        )
         self.nameLabel.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         layout.addWidget(self.nameLabel, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        is_coll = is_collection(summary)
-        self.badgeLabel = QLabel(category_name(summary), self)
-        self.badgeLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.badgeLabel.setStyleSheet(
-            "color: #f69730; font-weight: 600; background: transparent; border: none;"
-            if is_coll
-            else "color: gray; background: transparent; border: none;"
+        self.badgeLabel = CaptionLabel(category_name(summary), self)
+        self.badgeLabel.setTextColor(
+            *(ORANGE_TEXT if is_collection(summary) else SECONDARY_TEXT)
         )
+        self.badgeLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.badgeLabel.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         layout.addWidget(self.badgeLabel, 0, Qt.AlignmentFlag.AlignHCenter)
 
@@ -548,7 +569,16 @@ class DressCard(QWidget):
         self.checkBox.toggled.connect(self._on_toggled)
         self.checkBox.raise_()
 
-        self._apply_bg(False)
+        bind_theme(self, self._apply_theme)
+
+    # ---- 主题 ----
+
+    def _apply_theme(self) -> None:
+        self.badgeLabel.setTextColor(
+            *(ORANGE_TEXT if is_collection(self.summary) else SECONDARY_TEXT)
+        )
+        self._accent = ThemeColor.PRIMARY.color()
+        self._apply_bg(self.checkBox.isChecked())
 
     # ---- 尺寸 ----
 
@@ -593,13 +623,14 @@ class DressCard(QWidget):
         self.toggled.emit(self.summary, checked)
 
     def _apply_bg(self, checked: bool) -> None:
+        # 类选择器限定自身：避免通用 * 规则把背景级联到子 label（文字区整块上色）
         if self._selectable and checked:
             a = self._accent
             self.setStyleSheet(
-                f"background-color: rgba({a.red()}, {a.green()}, {a.blue()}, 70);"
+                f"DressCard {{ background-color: rgba({a.red()}, {a.green()}, {a.blue()}, 70); }}"
             )
         else:
-            self.setStyleSheet("background-color: transparent;")
+            self.setStyleSheet("DressCard { background-color: transparent; }")
 
     def mousePressEvent(self, event) -> None:
         # 图片区由 imageBtn 处理；文字/空白区点击同样切换
@@ -700,12 +731,10 @@ class DetailCard(QWidget):
         self.imageBtn.clicked.connect(self._on_image_clicked)
         layout.addWidget(self.imageBtn, 1)
 
-        self.nameLabel = QLabel(name or "", self)
+        self.nameLabel = CaptionLabel(name or "", self)
+        self.nameLabel.setTextColor(*SECONDARY_TEXT)
         self.nameLabel.setWordWrap(True)
         self.nameLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.nameLabel.setStyleSheet(
-            "font-size: 12px; color: #909090; background: transparent; border: none;"
-        )
         self.nameLabel.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         layout.addWidget(self.nameLabel, 0, Qt.AlignmentFlag.AlignHCenter)
 
@@ -812,9 +841,10 @@ class DressDetailGrid(_CardGridBase):
 
 
 class QueueCard(QWidget):
-    """下载队列横向卡片：固定封面框(72×72 等比) + 名称 + 类别徽标 + ID/数量 + 右上角勾选框。
+    """下载队列横向卡片：自适应封面框(方块) + 名称 + 类别徽标 + ID/数量 + 右上角勾选框。
 
     整卡可点：多选态切换勾选 + 选中高亮；横向布局，宽度随 set_cell 自动伸展。
+    名称可换行（防截断），信息区右侧预留勾选框空间防遮挡。
     """
 
     clicked = Signal(object)
@@ -846,10 +876,13 @@ class QueueCard(QWidget):
 
         info = QVBoxLayout()
         info.setSpacing(4)
-        self.nameLabel = QLabel("", self)
-        self.nameLabel.setWordWrap(False)
-        self.badgeLabel = QLabel("", self)
-        self.metaLabel = QLabel("", self)
+        # 右侧预留勾选框区域，长名换行也不跑到勾选框下面
+        info.setContentsMargins(0, 0, 24, 0)
+        self.nameLabel = StrongBodyLabel("", self)
+        self.nameLabel.setWordWrap(True)
+        self.badgeLabel = CaptionLabel("", self)
+        self.metaLabel = CaptionLabel("", self)
+        self.metaLabel.setTextColor(*SECONDARY_TEXT)
         for lbl in (self.nameLabel, self.badgeLabel, self.metaLabel):
             lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         info.addWidget(self.nameLabel)
@@ -864,7 +897,7 @@ class QueueCard(QWidget):
         self.checkBox.raise_()
 
         self._refresh_text()
-        self._apply_bg(False)
+        bind_theme(self, self._apply_theme)
 
     def _refresh_text(self) -> None:
         kind = item_kind(self.item)
@@ -872,25 +905,31 @@ class QueueCard(QWidget):
             pkg = self.item
             self.nameLabel.setText(pkg.text or ("#" + str(pkg.id)))
             self.badgeLabel.setText("GIF 动图包" if pkg.is_gif else "表情包")
-            self.badgeLabel.setStyleSheet(
-                "color: gray; background: transparent; border: none;"
-            )
             self.metaLabel.setText(f"ID: {pkg.id}")
         else:
             s = self.item
             self.nameLabel.setText(s.name or "未命名")
             self.badgeLabel.setText(category_name(s))
-            is_coll = is_collection(s)
-            self.badgeLabel.setStyleSheet(
-                "color: #f69730; font-weight: 600; background: transparent; border: none;"
-                if is_coll
-                else "color: gray; background: transparent; border: none;"
-            )
             raw = s.raw or {}
             iid = raw.get("item_id") or raw.get("id") or "-"
             price = s.sale_bp_forever
             price_text = f"{price:.2f} 元" if price is not None else "价格未知"
             self.metaLabel.setText(f"ID: {iid} · {price_text}")
+
+    # ---- 主题 ----
+
+    def _refresh_badge(self) -> None:
+        """徽标颜色：表情包 / 装扮用次要色，收藏集用品牌橙（两主题均可读）。"""
+        if item_kind(self.item) == "package":
+            colors = SECONDARY_TEXT
+        else:
+            colors = ORANGE_TEXT if is_collection(self.item) else SECONDARY_TEXT
+        self.badgeLabel.setTextColor(*colors)
+
+    def _apply_theme(self) -> None:
+        self._refresh_badge()
+        self._accent = ThemeColor.PRIMARY.color()
+        self._apply_bg(self.checkBox.isChecked())
 
     # ---- 尺寸 / 多选 API ----
 
@@ -906,6 +945,10 @@ class QueueCard(QWidget):
             self._CHECK_SIZE,
         )
         self.checkBox.raise_()
+        # 封面随卡宽/高自适应方块；值未变化时不动，避免 setFixedSize 触发递归布局
+        img = max(72, min(self.height() - 16, round(self.width() * 0.28)))
+        if self.imageBtn.width() != img:
+            self.imageBtn.setFixedSize(img, img)
         self._apply_pixmap()
 
     def set_selectable(self, selectable: bool) -> None:
@@ -932,13 +975,14 @@ class QueueCard(QWidget):
         self.toggled.emit(self.item, checked)
 
     def _apply_bg(self, checked: bool) -> None:
+        # 类选择器限定自身：避免通用 * 规则把背景级联到子 label（文字区整块上色）
         if self._selectable and checked:
             a = self._accent
             self.setStyleSheet(
-                f"background-color: rgba({a.red()}, {a.green()}, {a.blue()}, 70);"
+                f"QueueCard {{ background-color: rgba({a.red()}, {a.green()}, {a.blue()}, 70); }}"
             )
         else:
-            self.setStyleSheet("background-color: transparent;")
+            self.setStyleSheet("QueueCard { background-color: transparent; }")
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -972,12 +1016,12 @@ class QueueCard(QWidget):
 
 
 class QueueList(_CardGridBase):
-    """下载队列整行列表：一行一张横向卡片，宽度铺满视口（混合表情包 / 收藏集）。"""
+    """下载队列网格（混合表情包 / 收藏集）：宽视口两列、窄视口单列，随窗口缩放实时切换。"""
 
     queueClicked = Signal(object)
 
     _card_class = QueueCard
-    _min_cell = QSize(320, 88)
+    _min_cell = QSize(300, 112)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -990,11 +1034,17 @@ class QueueList(_CardGridBase):
         return _package_cover_url(item)
 
     def _cell_size(self) -> QSize:
+        # 响应式列数：可用宽度放得下两列（各至少 _min_cell 宽）→ 两列，否则单列铺满。
+        # 两列 w=(vw-spacing)//2、单列 w=vw-spacing，配合 QListView 的 gridSize+spacing
+        # 排布，数学上保证不横向溢出（内容宽度 ≤ 视口宽）。
         vw = self.viewport().width()
         if vw <= 0:
-            vw = self._min_cell.width()
-        w = max(self._min_cell.width(), vw - self.spacing())
-        return QSize(w, self._min_cell.height())
+            vw = self._min_cell.width() * 2 + self.spacing()
+        if vw >= 2 * self._min_cell.width() + self.spacing():
+            w = (vw - self.spacing()) // 2
+        else:
+            w = vw - self.spacing()
+        return QSize(max(1, w), self._min_cell.height())
 
     def set_items(self, items) -> None:
         self.set_cards(items)

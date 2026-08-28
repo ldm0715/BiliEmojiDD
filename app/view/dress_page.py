@@ -8,7 +8,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
-    QLabel,
     QListWidget,
     QListWidgetItem,
     QStackedWidget,
@@ -17,6 +16,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from qfluentwidgets import (
+    BodyLabel,
+    CaptionLabel,
     CheckBox,
     ComboBox,
     InfoBarPosition,
@@ -24,14 +25,20 @@ from qfluentwidgets import (
     ProgressBar,
     PushButton,
     SearchLineEdit,
+    StrongBodyLabel,
 )
 
 from app.common.config import cfg
 from app.common.exception import show_bili_error
-from app.common.notify import notify_success, notify_warning
+from app.common.notify import notify_info, notify_success, notify_warning
 from app.common.proxy import parse_proxy
+from app.common.theme import ORANGE_TEXT, SECONDARY_TEXT
 from app.components.download_queue import download_queue
-from app.components.download_runner import start_download
+from app.components.download_runner import (
+    collection_download_dir,
+    downloaded_exists,
+    start_download,
+)
 from app.components.dress_helpers import dlc_ids, is_collection
 from app.components.image_viewer import show_image_viewer
 from app.components.task import run_task
@@ -44,6 +51,8 @@ class DressPage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._detail = None  # (act_id, lottery_id, summary)
+        self._detail_summary = None  # 详情当前收藏集（入队按钮状态依据，避免魔法下标）
+        self._last_summaries = None  # 最近一次搜索结果原始列表（勾选框实时过滤用）
         self._detail_items: list[tuple[str, str]] = []  # 详情图片 (name, url)
 
         root = QVBoxLayout(self)
@@ -63,15 +72,17 @@ class DressPage(QWidget):
 
         self.searchBtn.clicked.connect(self._on_search)
         self.kwEdit.returnPressed.connect(self._on_search)
-        self.backBtn.clicked.connect(
-            lambda: self.stacked.setCurrentWidget(self.searchPage)
-        )
+        self.backBtn.clicked.connect(self._go_back)
         self.detailBtn.clicked.connect(self._on_detail_download)
+        self.queueBtn.clicked.connect(self._on_detail_add_to_queue)
         self.multiBtn.toggled.connect(self._set_multi)
         self.addBtn.clicked.connect(self._add_to_queue)
+        self.onlyCollCheck.toggled.connect(self._apply_filter)
         self.grid.summaryClicked.connect(self._open_detail)
         self.grid.selectionChanged.connect(self._update_select_label)
         self.detailGrid.imageClicked.connect(self._open_image_viewer)
+        # 队列变化时同步详情页按钮状态（加入/删除/清空后即时刷新）
+        download_queue.changed.connect(self._sync_queue_btn)
 
     # ---- 搜索页 ----
     def _build_search_page(self) -> None:
@@ -82,6 +93,7 @@ class DressPage(QWidget):
         self.kwEdit = SearchLineEdit(self.searchPage)
         self.kwEdit.setPlaceholderText("输入收藏集关键词，如 2233")
         self.onlyCollCheck = CheckBox("仅看收藏集", self.searchPage)
+        self.onlyCollCheck.setChecked(True)  # 默认只看收藏集（装扮无法下载）
         self.multiBtn = CheckBox("多选", self.searchPage)
         self.searchBtn = PrimaryPushButton("搜索", self.searchPage)
         top_row.addWidget(self.kwEdit, 1)
@@ -91,8 +103,8 @@ class DressPage(QWidget):
         layout.addLayout(top_row)
 
         select_row = QHBoxLayout()
-        self.selectLabel = QLabel("已选 0 个", self.searchPage)
-        self.selectLabel.setStyleSheet("color: gray;")
+        self.selectLabel = CaptionLabel("已选 0 个", self.searchPage)
+        self.selectLabel.setTextColor(*SECONDARY_TEXT)
         self.addBtn = PrimaryPushButton("加入下载", self.searchPage)
         self.addBtn.setVisible(False)
         select_row.addWidget(self.selectLabel)
@@ -103,8 +115,8 @@ class DressPage(QWidget):
         self.grid = DressGrid(self.searchPage)
         layout.addWidget(self.grid, 1)
 
-        self.hintLabel = QLabel("搜索 B 站装扮 / 收藏集，点击卡片查看详情", self.searchPage)
-        self.hintLabel.setStyleSheet("color: gray;")
+        self.hintLabel = BodyLabel("搜索 B 站装扮 / 收藏集，点击卡片查看详情", self.searchPage)
+        self.hintLabel.setTextColor(*SECONDARY_TEXT)
         self.hintLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.hintLabel)
 
@@ -117,17 +129,16 @@ class DressPage(QWidget):
         self.backBtn = PushButton("返回搜索", self.detailPage)
         title_layout = QVBoxLayout()
         title_layout.setSpacing(4)
-        self.detailName = QLabel("", self.detailPage)
-        self.detailName.setStyleSheet("font-size: 16px; font-weight: 600;")
-        self.detailInfo = QLabel("", self.detailPage)
-        self.detailInfo.setStyleSheet("color: gray;")
+        self.detailName = StrongBodyLabel("", self.detailPage)
+        self.detailInfo = BodyLabel("", self.detailPage)
+        self.detailInfo.setTextColor(*SECONDARY_TEXT)
         title_layout.addWidget(self.detailName)
         title_layout.addWidget(self.detailInfo)
         top_row.addWidget(self.backBtn)
         top_row.addLayout(title_layout, 1)
         layout.addLayout(top_row)
 
-        layout.addWidget(QLabel("内容预览"))
+        layout.addWidget(BodyLabel("内容预览"))
 
         self.detailGrid = DressDetailGrid(self.detailPage)
         layout.addWidget(self.detailGrid, 1)
@@ -155,17 +166,24 @@ class DressPage(QWidget):
         layout.addWidget(self.videoList)
 
         download_row = QHBoxLayout()
-        download_row.addWidget(QLabel("下载内容:"))
+        download_row.addWidget(BodyLabel("下载内容:"))
         self.modeCombo = ComboBox(self.detailPage)
         # 注意：qfluentwidgets ComboBox.addItem(text, icon, userData)，第二位置参是 icon
         self.modeCombo.addItem("静态图片", userData="image")
         self.modeCombo.addItem("动态视频", userData="video")
         self.modeCombo.addItem("图片 + 视频", userData="both")
         self.modeCombo.setCurrentIndex(2)
+        self.downloadedLabel = CaptionLabel("已下载过", self.detailPage)
+        self.downloadedLabel.setTextColor(*ORANGE_TEXT)
+        self.downloadedLabel.hide()
+        self.queueBtn = PushButton("加入下载", self.detailPage)
+        self.queueBtn.setEnabled(False)
         self.detailBtn = PrimaryPushButton("下载到本地", self.detailPage)
         self.detailBtn.setEnabled(False)
         download_row.addWidget(self.modeCombo)
+        download_row.addWidget(self.downloadedLabel)
         download_row.addStretch(1)
+        download_row.addWidget(self.queueBtn)
         download_row.addWidget(self.detailBtn)
         layout.addLayout(download_row)
 
@@ -201,12 +219,24 @@ class DressPage(QWidget):
         )
 
     def _show_results(self, summaries) -> None:
+        self._last_summaries = list(summaries)
         if self.onlyCollCheck.isChecked():
             summaries = [s for s in summaries if is_collection(s)]
         self.grid.set_summaries(summaries)
         self.hintLabel.setText(
             "没有符合条件的收藏集" if not summaries else f"共 {len(summaries)} 个结果"
         )
+
+    def _apply_filter(self) -> None:
+        """「仅看收藏集」勾选框实时过滤当前结果，无需重新搜索。"""
+        if self._last_summaries is None:
+            return
+        self._show_results(self._last_summaries)
+
+    def _go_back(self) -> None:
+        self._detail_summary = None
+        self._sync_queue_btn()
+        self.stacked.setCurrentWidget(self.searchPage)
 
     # ---- 详情 ----
     def _open_detail(self, summary) -> None:
@@ -220,6 +250,11 @@ class DressPage(QWidget):
             return
         act_id, lottery_id = dlc_ids(summary)
         self._detail = (act_id, lottery_id, summary)
+        self._detail_summary = summary
+        # 重置入队按钮（不继承上一个详情页状态），拉取成功后由 _show_detail 重新同步
+        self.queueBtn.setText("加入下载")
+        self.queueBtn.setEnabled(False)
+        self.downloadedLabel.hide()
         self.detailName.setText(summary.name or "收藏集")
         self.detailInfo.setText("")
         self._detail_items = []
@@ -269,6 +304,10 @@ class DressPage(QWidget):
             f"名称: {collection.name or ''} · 图片 {len(items)} 个 · 视频 {len(videos)} 个"
         )
         self.detailBtn.setEnabled(True)
+        self._sync_queue_btn()
+        self.downloadedLabel.setVisible(
+            downloaded_exists(collection_download_dir(collection))
+        )
 
     def _toggle_video(self) -> None:
         show = not self.videoList.isVisible()
@@ -314,6 +353,37 @@ class DressPage(QWidget):
         )
 
     # ---- 下载（详情页单包） ----
+    def _sync_queue_btn(self) -> None:
+        """入队按钮状态单一同步源：无详情或已在队列 → 「已加入」禁用，否则可点。"""
+        s = self._detail_summary
+        if s is None or download_queue.contains(s):
+            self.queueBtn.setText("已加入")
+            self.queueBtn.setEnabled(False)
+        else:
+            self.queueBtn.setText("加入下载")
+            self.queueBtn.setEnabled(True)
+
+    def _on_detail_add_to_queue(self) -> None:
+        if self._detail_summary is None:
+            return
+        summary = self._detail_summary
+        name = summary.name or "收藏集"
+        if download_queue.add(summary):
+            # add() 会发 changed → _sync_queue_btn 把按钮置「已加入」禁用
+            notify_success(
+                "已加入下载队列",
+                f"「{name}」已加入，可前往「下载」页查看",
+                parent=self.detailPage,
+                position=InfoBarPosition.TOP_RIGHT,
+            )
+        else:
+            notify_info(
+                "已在下载队列",
+                f"「{name}」已在队列中",
+                parent=self.detailPage,
+                position=InfoBarPosition.TOP_RIGHT,
+            )
+
     def _on_detail_download(self) -> None:
         if self._detail is None:
             return

@@ -12,6 +12,7 @@ B 站表情包 / 收藏集（装扮）下载器 GUI：PySide6 + QFluentWidgets �
 | [download_queue.md](download_queue.md) | **下载队列与下载设置**：下载队列工作流、设置项、踩坑记录 |
 | [collection_page.md](collection_page.md) | **收藏集页 + 混合下载队列**：收藏集页改造、类别判别、混合队列、踩坑记录 |
 | [image_viewer.md](image_viewer.md) | **详情页图片查看器**：遮罩 lightbox + 左右翻页、letterbox 方案、qfluentwidgets 上游坑 |
+| [ui_polish.md](ui_polish.md) | **UI 改进**：暗色主题补全（全局调色板 + 主题化 Label）、网格响应式填充、下载双列 + 去阴影、侧栏主题切换 |
 
 ## 快速上手
 

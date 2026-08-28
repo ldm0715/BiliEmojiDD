@@ -8,19 +8,22 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
-    QLabel,
     QVBoxLayout,
     QWidget,
 )
 from qfluentwidgets import (
+    BodyLabel,
+    CaptionLabel,
     CardWidget,
     ComboBox,
+    FluentIcon,
     InfoBarPosition,
     LineEdit,
     PasswordLineEdit,
     PrimaryPushButton,
     PushButton,
     SpinBox,
+    StrongBodyLabel,
     Theme,
     qconfig,
     setTheme,
@@ -31,6 +34,7 @@ from app.common.exception import show_bili_error
 from app.common.notify import notify_success, notify_warning
 from app.common.proxy import build_proxy, parse_proxy, proxy_env, split_proxy
 from app.common.signal_bus import signal_bus
+from app.components.download_runner import open_in_explorer
 from app.components.task import run_task
 
 _THEMES = [Theme.AUTO, Theme.LIGHT, Theme.DARK]
@@ -54,15 +58,13 @@ class SettingPage(QWidget):
         v = QVBoxLayout(card)
         v.setSpacing(8)
 
-        title = QLabel("账号（Cookie）", card)
-        title.setStyleSheet("font-size: 15px; font-weight: 600;")
-        desc = QLabel(
+        title = StrongBodyLabel("账号（Cookie）", card)
+        self.descLabel = BodyLabel(
             "部分功能（全部表情包、收藏集下载）需要登录。Cookie 仅保存在本机"
             "配置中，不会上传。",
             card,
         )
-        desc.setWordWrap(True)
-        desc.setStyleSheet("color: gray;")
+        self.descLabel.setWordWrap(True)
 
         self.cookieEdit = PasswordLineEdit(card)
         self.cookieEdit.setPlaceholderText("SESSDATA=...; bili_jct=...")
@@ -75,18 +77,17 @@ class SettingPage(QWidget):
         row.addWidget(self.verifyBtn)
         row.addStretch(1)
 
-        hint = QLabel(
+        self.configHintLabel = CaptionLabel(
             f"配置保存在：{APP_CONFIG_DIR / 'config.json'}",
             card,
         )
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: gray; font-size: 12px;")
+        self.configHintLabel.setWordWrap(True)
 
         v.addWidget(title)
-        v.addWidget(desc)
+        v.addWidget(self.descLabel)
         v.addWidget(self.cookieEdit)
         v.addLayout(row)
-        v.addWidget(hint)
+        v.addWidget(self.configHintLabel)
 
         layout.addWidget(card)
 
@@ -144,19 +145,20 @@ class SettingPage(QWidget):
         v = QVBoxLayout(card)
         v.setSpacing(8)
 
-        title = QLabel("下载", card)
-        title.setStyleSheet("font-size: 15px; font-weight: 600;")
+        title = StrongBodyLabel("下载", card)
 
         dir_row = QHBoxLayout()
-        dir_row.addWidget(QLabel("下载目录", card))
+        dir_row.addWidget(BodyLabel("下载目录", card))
         self.dirEdit = LineEdit(card)
         self.dirEdit.setText(cfg.download_dir.value)
         self.browseBtn = PushButton("浏览…", card)
+        self.openDirBtn = PushButton("打开下载文件夹", card)
         dir_row.addWidget(self.dirEdit, 1)
         dir_row.addWidget(self.browseBtn)
+        dir_row.addWidget(self.openDirBtn)
 
         proxy_row = QHBoxLayout()
-        proxy_row.addWidget(QLabel("代理地址", card))
+        proxy_row.addWidget(BodyLabel("代理地址", card))
         self.protoCombo = ComboBox(card)
         # qfluentwidgets addItem(text, icon, userData)：第二位置参是 icon，userData 须用关键字
         self.protoCombo.addItem("HTTP", userData="http")
@@ -178,7 +180,7 @@ class SettingPage(QWidget):
         self.portSpin.setValue(port if port > 0 else 7890)
 
         thread_row = QHBoxLayout()
-        thread_row.addWidget(QLabel("下载线程数", card))
+        thread_row.addWidget(BodyLabel("下载线程数", card))
         self.threadSpin = SpinBox(card)
         self.threadSpin.setRange(1, 16)
         self.threadSpin.setValue(cfg.max_workers.value)
@@ -186,23 +188,23 @@ class SettingPage(QWidget):
         thread_row.addStretch(1)
 
         self.downloadSaveBtn = PrimaryPushButton("保存下载设置", card)
-        hint = QLabel(
+        self.downloadHintLabel = CaptionLabel(
             "代理仅支持 HTTP/HTTPS（socks 未安装 PySocks）；端口 1–65535，留空主机名表示不使用代理。",
             card,
         )
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: gray; font-size: 12px;")
+        self.downloadHintLabel.setWordWrap(True)
 
         v.addWidget(title)
         v.addLayout(dir_row)
         v.addLayout(proxy_row)
         v.addLayout(thread_row)
         v.addWidget(self.downloadSaveBtn, 0, Qt.AlignmentFlag.AlignRight)
-        v.addWidget(hint)
+        v.addWidget(self.downloadHintLabel)
 
         layout.addWidget(card)
 
         self.browseBtn.clicked.connect(self._on_browse)
+        self.openDirBtn.clicked.connect(self._on_open_dir)
         self.downloadSaveBtn.clicked.connect(self._on_save_download)
 
     def _on_browse(self) -> None:
@@ -210,6 +212,11 @@ class SettingPage(QWidget):
         directory = QFileDialog.getExistingDirectory(self, "选择下载目录", start)
         if directory:
             self.dirEdit.setText(directory)
+
+    def _on_open_dir(self) -> None:
+        path = Path(self.dirEdit.text().strip() or cfg.download_dir.value)
+        path.mkdir(parents=True, exist_ok=True)
+        open_in_explorer(path, self)
 
     def _on_save_download(self) -> None:
         directory = self.dirEdit.text().strip()
@@ -252,15 +259,15 @@ class SettingPage(QWidget):
         v = QVBoxLayout(card)
         v.setSpacing(8)
 
-        title = QLabel("外观", card)
-        title.setStyleSheet("font-size: 15px; font-weight: 600;")
+        title = StrongBodyLabel("外观", card)
 
         row = QHBoxLayout()
-        row.addWidget(QLabel("主题", card))
+        row.addWidget(BodyLabel("主题", card))
         self.themeCombo = ComboBox(card)
-        self.themeCombo.addItem("跟随系统", userData=Theme.AUTO)
-        self.themeCombo.addItem("浅色", userData=Theme.LIGHT)
-        self.themeCombo.addItem("深色", userData=Theme.DARK)
+        # qfluentwidgets addItem(text, icon, userData)：图标用组件库 FluentIcon
+        self.themeCombo.addItem("跟随系统", FluentIcon.SYNC, userData=Theme.AUTO)
+        self.themeCombo.addItem("浅色", FluentIcon.BRIGHTNESS, userData=Theme.LIGHT)
+        self.themeCombo.addItem("深色", FluentIcon.CONSTRACT, userData=Theme.DARK)
         try:
             self.themeCombo.setCurrentIndex(_THEMES.index(cfg.theme.value))
         except ValueError:
@@ -273,10 +280,22 @@ class SettingPage(QWidget):
         layout.addWidget(card)
 
         self.themeCombo.currentIndexChanged.connect(self._on_theme_changed)
+        signal_bus.configChanged.connect(self._sync_theme_combo)
+
+    def _sync_theme_combo(self) -> None:
+        """外部切换主题（侧栏按钮）后同步下拉框显示。"""
+        try:
+            index = _THEMES.index(cfg.theme.value)
+        except ValueError:
+            index = 0
+        self.themeCombo.blockSignals(True)
+        self.themeCombo.setCurrentIndex(index)
+        self.themeCombo.blockSignals(False)
 
     def _on_theme_changed(self, index: int) -> None:
         theme = self.themeCombo.itemData(index)
         if theme is None:
             return
-        qconfig.set(cfg.theme, theme)
+        # 先 setTheme 再存 cfg.theme：保证保存时 QFluentWidgets.ThemeMode 与应用主题一致
         setTheme(theme)
+        qconfig.set(cfg.theme, theme)

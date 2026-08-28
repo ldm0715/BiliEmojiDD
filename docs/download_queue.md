@@ -1,5 +1,7 @@
 # 下载队列 + 下载设置（新增功能说明）
 
+> **后续更新**：① 下载队列卡片 `QueueCard`/`QueueList` 改为**响应式布局**——宽视口两列、窄视口自动退回单列（`_cell_size` 数学保证不横向溢出），封面随单元格自适应方块、名称可换行防截断、信息区右侧预留勾选框空间；② 选中背景改用**类选择器**（如 `QueueCard { background-color: ... }`）限定自身，不再用通用 `*` 规则级联子 label（修复多选后文字区整块上色）；③ 所有文字标签改用 qfluentwidgets 主题化组件（`CaptionLabel`/`StrongBodyLabel`/`BodyLabel` + `setTextColor(light, dark)`），主题切换即时重刷；④ 补全深色主题（`app/common/theme.py` 全局调色板 + `bind_theme`）。
+
 本次改动为应用新增了「下载队列」工作流，并补全了下载相关的设置项与若干关键修复。本文记录改动内容、关键实现与踩坑点，便于后续维护。
 
 > **后续更新**：下载队列已扩展为**混合表情包 + 收藏集**（按 `(类型, ID)` 去重），下载页改用统一横向卡片 `QueueList`，并新增 `download_collection_batch` / `download_mixed_batch` 批量下载。详见 [collection_page.md](collection_page.md)。本文以下内容描述的是初版（仅表情包）实现。

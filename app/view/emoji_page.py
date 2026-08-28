@@ -11,12 +11,12 @@ from biliemoji import Emoji
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
-    QLabel,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 from qfluentwidgets import (
+    CaptionLabel,
     CheckBox,
     InfoBarPosition,
     Pivot,
@@ -29,6 +29,7 @@ from app.common.config import cfg
 from app.common.exception import show_bili_error
 from app.common.notify import notify_info, notify_success, notify_warning
 from app.common.proxy import parse_proxy
+from app.common.theme import SECONDARY_TEXT
 from app.components.cache import load_all_packages_cache, save_all_packages_cache
 from app.components.download_queue import download_queue
 from app.components.package_detail import PackageDetailView
@@ -134,8 +135,8 @@ class _AllPackagesTab(QWidget):
         self.filterEdit = SearchLineEdit(self.listPage)
         self.filterEdit.setPlaceholderText("输入关键词过滤（包名或 ID）")
         self.filterEdit.setEnabled(False)
-        self.countLabel = QLabel("", self.listPage)
-        self.countLabel.setStyleSheet("color: gray;")
+        self.countLabel = CaptionLabel("", self.listPage)
+        self.countLabel.setTextColor(*SECONDARY_TEXT)
         self.multiBtn = CheckBox("多选", self.listPage)
         top_row.addWidget(self.fetchBtn)
         top_row.addWidget(self.refreshBtn)
@@ -145,8 +146,8 @@ class _AllPackagesTab(QWidget):
         layout.addLayout(top_row)
 
         select_row = QHBoxLayout()
-        self.selectLabel = QLabel("已选 0 个", self.listPage)
-        self.selectLabel.setStyleSheet("color: gray;")
+        self.selectLabel = CaptionLabel("已选 0 个", self.listPage)
+        self.selectLabel.setTextColor(*SECONDARY_TEXT)
         self.addBtn = PrimaryPushButton("加入下载", self.listPage)
         self.addBtn.setVisible(False)
         select_row.addWidget(self.selectLabel)
