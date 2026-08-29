@@ -46,6 +46,23 @@ def item_key(item) -> tuple[str, object]:
     return ("coll", "name:" + (getattr(item, "name", None) or ""))
 
 
+def item_cover_url(item) -> str | None:
+    """队列项封面 URL：表情包取包内第一张表情（动图优先），收藏集取 image_cover。
+
+    下载页队列卡与主页队列预览共用，保证两处显示同一张图。
+    """
+    if item_kind(item) == "collection":
+        return getattr(item, "image_cover", None)
+    emote = getattr(item, "emote", None) or ()
+    if emote:
+        first = emote[0]
+        if first.gif_url:
+            return first.gif_url
+        if first.url:
+            return first.url
+    return getattr(item, "url", None)
+
+
 class DownloadQueue(QObject):
     """按 (类型, ID) 去重的内存下载队列。
 

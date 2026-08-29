@@ -33,7 +33,7 @@ from qfluentwidgets.common.style_sheet import ThemeColor
 from app.common.signal_bus import signal_bus
 from app.common.theme import ORANGE_TEXT, SECONDARY_TEXT, bind_theme
 from app.components.content_meta import content_meta
-from app.components.download_queue import item_key, item_kind
+from app.components.download_queue import item_cover_url, item_key, item_kind
 from app.components.download_runner import (
     collection_download_dir,
     downloaded_exists,
@@ -1363,9 +1363,8 @@ class QueueList(_CardGridBase):
 
     @staticmethod
     def _cover_url(item):
-        if item_kind(item) == "collection":
-            return item.image_cover
-        return _package_cover_url(item)
+        # 与主页的队列预览共用同一个取图口径
+        return item_cover_url(item)
 
     def _update_visible(self) -> None:
         super()._update_visible()

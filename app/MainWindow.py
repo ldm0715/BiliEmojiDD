@@ -22,6 +22,13 @@ from app.components.video_cache import video_cache
 from app.view.download_page import DownloadPage
 from app.view.dress_page import DressPage
 from app.view.emoji_page import EmojiPage
+from app.view.home_page import (
+    NAV_DOWNLOAD,
+    NAV_DRESS,
+    NAV_EMOJI,
+    NAV_SETTING,
+    HomePage,
+)
 from app.view.setting_page import SettingPage
 
 
@@ -29,6 +36,7 @@ class MainWindow(FluentWindow):
     def __init__(self) -> None:
         super().__init__()
         self.navigationInterface.setExpandWidth(150)  # 侧栏展开宽度（默认 322）
+        self.homePage = HomePage(self)
         self.emojiPage = EmojiPage(self)
         self.dressPage = DressPage(self)
         self.downloadPage = DownloadPage(self)
@@ -39,10 +47,14 @@ class MainWindow(FluentWindow):
 
     def initNavigation(self) -> None:
         # FluentWindow.addSubInterface 要求页面 objectName 非空
+        self.homePage.setObjectName("homePage")
         self.emojiPage.setObjectName("emojiPage")
         self.dressPage.setObjectName("dressPage")
         self.downloadPage.setObjectName("downloadPage")
         self.settingPage.setObjectName("settingPage")
+        # 主页放第一个 → addSubInterface 在 stackedWidget.count()==1 时会自动
+        # setCurrentItem + setDefaultRouteKey，它自然成为启动页，无需额外 switchTo
+        self.addSubInterface(self.homePage, FluentIcon.HOME, "主页")
         self.addSubInterface(self.emojiPage, FluentIcon.EMOJI_TAB_SYMBOLS, "表情包")
         self.addSubInterface(self.dressPage, FluentIcon.ALBUM, "收藏集")
         self.addSubInterface(self.downloadPage, FluentIcon.DOWNLOAD, "下载")
@@ -68,6 +80,31 @@ class MainWindow(FluentWindow):
         )
         self._update_theme_icon()
         qconfig.themeChangedFinished.connect(self._update_theme_icon)
+        # 主页只发信号（不反向引用窗口），跳转与带参搜索都在这里落地
+        self.homePage.navigateRequested.connect(self._navigate)
+        self.homePage.searchRequested.connect(self._search_from_home)
+
+    def _navigate(self, key: str) -> None:
+        page = {
+            NAV_EMOJI: self.emojiPage,
+            NAV_DRESS: self.dressPage,
+            NAV_DOWNLOAD: self.downloadPage,
+            NAV_SETTING: self.settingPage,
+        }.get(key)
+        if page is not None:
+            self.switchTo(page)
+
+    def _search_from_home(self, namespace: str, keyword: str) -> None:
+        """主页「最近搜索」胶囊：跳到对应页并带上关键词执行。"""
+        if namespace == "dress":
+            self.switchTo(self.dressPage)
+            self.dressPage.search_keyword(keyword)
+        elif namespace == "emoji_id":
+            self.switchTo(self.emojiPage)
+            self.emojiPage.query_package_id(keyword)
+        elif namespace == "emoji_filter":
+            self.switchTo(self.emojiPage)
+            self.emojiPage.filter_packages(keyword)
 
     def _toggle_theme(self) -> None:
         next_theme = Theme.LIGHT if is_dark() else Theme.DARK

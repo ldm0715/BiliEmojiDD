@@ -125,13 +125,24 @@ class _FakeCollItem:
 
 
 def shot_pages(theme: Theme, tag: str) -> None:
-    """四个页面的整页截图（版式比对用）。"""
+    """五个页面的整页截图（版式比对用）。"""
     setTheme(theme)
     print(f"== pages {tag} ==")
 
     from app.view.download_page import DownloadPage
     from app.view.dress_page import DressPage
     from app.view.emoji_page import EmojiPage
+    from app.view.home_page import HomePage
+
+    # 主页：宽窗（三列）+ 窄窗（单列），验证功能卡列数塌缩
+    hp = HomePage()
+    hp.resize(1000, 760)
+    shot(hp, f"home_page_{tag}.png")
+    hp.resize(700, 760)
+    for _ in range(3):
+        app.processEvents()
+    shot(hp, f"home_page_narrow_{tag}.png")
+    hp.close()
 
     # 表情包页：全部表情包列表 + 详情
     ep = EmojiPage()
@@ -201,7 +212,7 @@ def main() -> None:
         shot(sp, f"setting_page_{tag}.png")
         sp.close()
 
-    # 表情包 / 收藏集 / 下载三页整页版式
+    # 主页 / 表情包 / 收藏集 / 下载五页整页版式
     shot_pages(Theme.LIGHT, "light")
     shot_pages(Theme.DARK, "dark")
 

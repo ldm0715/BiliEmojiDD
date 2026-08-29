@@ -291,6 +291,11 @@ class DressPage(QWidget):
         self.kwEdit.setText(keyword)
         self._on_search()
 
+    def search_keyword(self, keyword: str) -> None:
+        """外部入口（主页「最近搜索」）：回到搜索页并立即搜索该关键词。"""
+        self._go_back()  # 可能停在详情页
+        self._on_history_activated(keyword)
+
     def _show_results(self, summaries) -> None:
         self._last_summaries = list(summaries)
         if self.onlyCollCheck.isChecked():

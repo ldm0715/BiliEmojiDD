@@ -1,0 +1,70 @@
+{
+  "emoji": [
+    {
+      "file": "01.png",
+      "name": "[doge_金箍]",
+      "package_id": 1
+    },
+    {
+      "file": "02.png",
+      "name": "[热词系列_健健康康]",
+      "package_id": 53
+    },
+    {
+      "file": "03.png",
+      "name": "[tv_白眼]",
+      "package_id": 2
+    },
+    {
+      "file": "04.png",
+      "name": "[酷仔]",
+      "package_id": 3
+    },
+    {
+      "file": "05.png",
+      "name": "( ゜- ゜)つロ",
+      "package_id": 4
+    },
+    {
+      "file": "06.png",
+      "name": "[2233娘_大笑]",
+      "package_id": 6
+    },
+    {
+      "file": "07.png",
+      "name": "[罗小黑_鼓掌]",
+      "package_id": 25
+    },
+    {
+      "file": "08.png",
+      "name": "[沈剑心_滑稽]",
+      "package_id": 55
+    }
+  ],
+  "collection": [
+    {
+      "file": "01.jpg",
+      "name": "2026拜年纪-2233·群奔"
+    },
+    {
+      "file": "02.jpg",
+      "name": "2233·MBTI-神殿起源"
+    },
+    {
+      "file": "03.jpg",
+      "name": "2233·MBTI-ENFP"
+    },
+    {
+      "file": "04.jpg",
+      "name": "2233·元素协奏-潮蚀"
+    },
+    {
+      "file": "05.jpg",
+      "name": "2233·元素协奏-寻疆"
+    },
+    {
+      "file": "06.jpg",
+      "name": "2233·少女日记-指尖魔法"
+    }
+  ]
+}

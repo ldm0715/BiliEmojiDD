@@ -91,6 +91,10 @@ class _IdQueryTab(QWidget):
         self.idEdit.setText(text)
         self._on_query()
 
+    def query(self, text: str) -> None:
+        """外部入口（主页「最近搜索」）：回填 ID 并立即查询。"""
+        self._on_history_activated(text)
+
     def _on_query(self) -> None:
         text = self.idEdit.text().strip()
         if not text.isdigit():
@@ -169,6 +173,16 @@ class _AllPackagesTab(QWidget):
         """点历史胶囊 = 回填关键词并立即过滤。"""
         self.filterEdit.setText(keyword)
         self._on_filter()
+
+    def filter_by(self, keyword: str) -> None:
+        """外部入口（主页「最近搜索」）：回填关键词。
+
+        只有已经拉过全量列表时才真的过滤——没拉过就悄悄发起一次需要 Cookie 的
+        网络请求太突兀，先把词填好，用户点「拉取全部表情包」后自然生效。
+        """
+        self.filterEdit.setText(keyword)
+        if self._all:
+            self._on_filter()
 
     def _build_list_page(self) -> None:
         layout = QVBoxLayout(self.listPage)
@@ -376,3 +390,18 @@ class EmojiPage(QWidget):
 
         self.pivot.setCurrentItem("byId")
         self.stackedWidget.setCurrentWidget(self.idTab)
+
+    # ---- 外部入口（主页「最近搜索」跳转带参） ----
+
+    def query_package_id(self, text: str) -> None:
+        """切到「按 ID 查询」标签并立即查询该 ID。"""
+        # setCurrentItem 不触发 onClick、onClick 也不移动指示条，两句都要写
+        self.pivot.setCurrentItem("byId")
+        self.stackedWidget.setCurrentWidget(self.idTab)
+        self.idTab.query(text)
+
+    def filter_packages(self, keyword: str) -> None:
+        """切到「全部表情包」标签并回填过滤关键词。"""
+        self.pivot.setCurrentItem("all")
+        self.stackedWidget.setCurrentWidget(self.allTab)
+        self.allTab.filter_by(keyword)
