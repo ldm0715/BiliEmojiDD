@@ -17,6 +17,7 @@ from app.common.config import cfg
 from app.common.signal_bus import signal_bus
 from app.common.theme import is_dark
 from app.components.task import task_manager
+from app.components.video_cache import video_cache
 from app.view.download_page import DownloadPage
 from app.view.dress_page import DressPage
 from app.view.emoji_page import EmojiPage
@@ -103,4 +104,5 @@ class MainWindow(FluentWindow):
                 return
         # 仅清除尚未开始的任务；运行中的下载在确认退出后随进程结束
         task_manager.clear_pending()
+        video_cache.cleanup()  # 删掉本会话的视频临时目录
         event.accept()

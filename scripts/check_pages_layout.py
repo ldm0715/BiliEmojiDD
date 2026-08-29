@@ -7,7 +7,7 @@
 2. 每页有大标题，标题与命令卡左边缘对齐（都在 PAGE_MARGIN）；
 3. 多选行随「多选」勾选显隐（隐藏时命令卡自动收缩一行）；
 4. 详情头部卡：`add_leading_widget` 的返回按钮在名称左侧；`set_package` 后按钮可用；
-5. 收藏集详情：有视频显示视频卡、无视频整卡隐藏；
+5. 收藏集详情：内容分页 Pivot 随视频有无启停（视频页细节见 check_video_tab.py）；
 6. 窄窗口（600）命令卡内控件不越界；下载页 980 宽仍是两列；
 7. 切主题后卡片背景色跟随（`BackgroundAnimationWidget` 生效）。
 
@@ -28,11 +28,12 @@ app = QApplication(sys.argv)
 
 # 注意：必须等 app 模块导入完成后再 setTheme——config 导入会 qconfig.load 读取
 # 配置文件里的 QFluentWidgets.ThemeMode（可能残留旧值），覆盖之前设置的主题
-from qfluentwidgets import CheckBox, ComboBox, SimpleCardWidget, Theme, setTheme
+from qfluentwidgets import CheckBox, ComboBox, Pivot, Theme, setTheme
 
 from app.components.content_meta import content_meta
 from app.components.download_queue import download_queue
 from app.components.page_scaffold import PAGE_MARGIN, CommandCard, SectionCard
+from app.components.video_cache import video_cache
 from app.view.download_page import DownloadPage
 from app.view.dress_page import DressPage
 from app.view.emoji_page import EmojiPage
@@ -40,6 +41,8 @@ from app.view.emoji_page import EmojiPage
 setTheme(Theme.LIGHT)
 # 队列卡片会为可见项懒加载「内容数量」，假 ID 会排一堆 15s 超时请求把脚本挂住
 content_meta.set_enabled(False)
+# 视频页同理：假 URL 会排一堆超时下载任务
+video_cache.set_enabled(False)
 
 FAILS: list[str] = []
 
@@ -170,8 +173,11 @@ DRESS_NAMES = [
     "detailName",
     "detailInfo",
     "detailGrid",
-    "videoToggle",
-    "videoList",
+    "contentPivot",
+    "contentStack",
+    "videoPane",
+    "videoPlayer",
+    "videoStrip",
     "modeCombo",
     "downloadedLabel",
     "queueBtn",
@@ -277,21 +283,26 @@ check("6 个表情" in detail.detailLabel.text(), f"元信息已填充（{detail
 check(detail.downloadBtn.isEnabled(), "「下载到本地」可用")
 check(detail.grid.count() == 6, f"预览网格填了 6 张（实际 {detail.grid.count()}）")
 
-print("== 5. 收藏集详情：视频卡随视频有无显隐 ==")
-check(isinstance(dress.videoCard, SimpleCardWidget), "视频区包在组件库卡片里")
+print("== 5. 收藏集详情：内容分页随视频有无启停 ==")
+check(isinstance(dress.contentPivot, Pivot), "内容分页是组件库 Pivot")
 dress._detail_summary = _Summary("测试收藏集")
 dress.stacked.setCurrentWidget(dress.detailPage)
 dress._show_detail(_Collection(videos=2))
 settle()
-check(dress.videoCard.isVisible(), "有视频：视频卡显示")
-check("2 个" in dress.videoToggle.text(), f"视频数写进标题（{dress.videoToggle.text()!r}）")
-check(not dress.videoList.isVisible(), "视频列表默认收起")
-dress.videoToggle.click()
+check(dress.contentPivot.widget("video").isEnabled(), "有视频：动态视频 tab 可用")
+check(
+    "2" in dress.contentPivot.widget("video").text(),
+    f"视频数写进 tab 文字（{dress.contentPivot.widget('video').text()!r}）",
+)
+check(dress.contentStack.currentWidget() is dress.detailGrid, "默认停在静态图片页")
+dress._show_video_tab()
 settle()
-check(dress.videoList.isVisible(), "点标题展开视频列表")
+check(dress.contentStack.currentWidget() is dress.videoPane, "切到动态视频页")
 dress._show_detail(_Collection(videos=0))
 settle()
-check(not dress.videoCard.isVisible(), "无视频：整卡隐藏")
+check(not dress.contentPivot.widget("video").isEnabled(), "无视频：动态视频 tab 禁用")
+check(dress.contentStack.currentWidget() is dress.detailGrid, "无视频：回到静态图片页")
+dress.videoPlayer.release()
 
 print("== 6. 窄窗口不越界 + 下载页仍两列 ==")
 # 隐藏的子页不会重新布局，几何会停留在上次可见时的尺寸 —— 先切回列表/搜索页

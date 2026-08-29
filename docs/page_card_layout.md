@@ -71,6 +71,8 @@ Fluent 卡片规范重做：**大标题 → 命令卡（工具栏）→ 内容**
 - **收藏集页**：搜索命令卡（关键词 + 仅看收藏集 + 多选 + 搜索）+ 多选行；详情头部卡
   （返回 + 名称/信息 + 徽标 + 加入下载/下载到本地 + 下载内容下拉 + 进度条）、`SectionCard("内容预览")`、
   视频卡（`videoToggle` 当卡头 + `videoList`，无视频时整卡隐藏）。
+  > 视频卡后来被「内容预览」卡头的 `Pivot`（静态图片 / 动态视频）取代，
+  > 见 [collection_video.md](collection_video.md)。
 - **下载页**：命令卡里放计数 + 全选/删除/清空/下载 + `statusLabel` + `bar`；
   后两者由 `start_download` 控制显隐，隐藏时不占位，命令卡自动收缩。
 
@@ -109,7 +111,7 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py      # 三�
 `check_pages_layout.py` 覆盖 7 组：功能控件仍在（三页 + `PackageDetailView` 共 50 个属性、
 `modeCombo` 的 image/video/both 仍在）、大标题与命令卡左对齐 36、多选行显隐 + 命令卡高度随之变化、
 详情头部卡（返回按钮在名称左侧、`set_package` 后按钮可用、预览网格填充）、
-视频卡随视频有无显隐、600px 窄窗口不越界 + 下载页 980 宽仍两列、切主题后卡片背景重算。
+内容分页 Pivot 随视频有无启停、600px 窄窗口不越界 + 下载页 980 宽仍两列、切主题后卡片背景重算。
 
 六个脚本均 ALL PASSED。真实交互（网络拉取、下载、队列）依赖 Cookie，需人工
 `uv run python main.py` 验证。

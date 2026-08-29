@@ -19,10 +19,12 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import (
     CaptionLabel,
     CheckBox,
+    FluentIcon,
     IndeterminateProgressRing,
     InfoBadge,
     ListWidget,
     StrongBodyLabel,
+    Theme,
     ToolTipFilter,
     ToolTipPosition,
 )
@@ -996,6 +998,145 @@ class DressDetailGrid(_CardGridBase):
     def set_items(self, items) -> None:
         """items: [(name, url), ...]"""
         self.set_cards(items)
+
+
+class VideoCard(DetailCard):
+    """视频选择卡：DetailCard（封面 + 名称 + 加载环）再加 ▶ 角标与「正在播放」高亮。
+
+    item 仍是 `(name, 封面 url)`——视频地址由页面按下标持有，与 `VideoStrip` 的
+    下标一一对应（网格点击走 `itemClickedAt`，不靠载荷身份反查）。
+    """
+
+    _BADGE_SIZE = 30
+    _BADGE_ICON = 16
+
+    def __init__(self, item, parent: QWidget | None = None) -> None:
+        super().__init__(item, parent)
+        self._active = False
+        self.playBadge = QLabel(self)
+        self.playBadge.setFixedSize(self._BADGE_SIZE, self._BADGE_SIZE)
+        self.playBadge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # 角标盖在图片按钮上，不能吃掉点击
+        self.playBadge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.playBadge.setStyleSheet(
+            f"background: rgba(0, 0, 0, 110); border-radius: {self._BADGE_SIZE // 2}px;"
+        )
+        # 固定取暗色主题的图标（白色）：角标压在缩略图上，白色在两个主题下都可读
+        self.playBadge.setPixmap(
+            FluentIcon.PLAY_SOLID.icon(Theme.DARK).pixmap(
+                self._BADGE_ICON, self._BADGE_ICON
+            )
+        )
+        bind_theme(self, self._apply_theme)
+
+    def _apply_theme(self) -> None:
+        self._accent = ThemeColor.PRIMARY.color()
+        self._apply_bg()
+
+    def set_active(self, active: bool) -> None:
+        """正在播放的那张加背景高亮。"""
+        active = bool(active)
+        if active == self._active:
+            return
+        self._active = active
+        self._apply_bg()
+
+    def is_active(self) -> bool:
+        return self._active
+
+    def _apply_bg(self) -> None:
+        # 类选择器限定自身：无选择器的规则会级联到子 label，把文字区整块上色
+        if self._active:
+            a = getattr(self, "_accent", None) or ThemeColor.PRIMARY.color()
+            self.setStyleSheet(
+                f"VideoCard {{ background-color: rgba({a.red()}, {a.green()}, {a.blue()}, 70);"
+                f" margin: {_SEL_INSET}px; border-radius: 6px; }}"
+            )
+        else:
+            self.setStyleSheet(
+                f"VideoCard {{ background-color: transparent; margin: {_SEL_INSET}px; }}"
+            )
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        rect = self.imageBtn.geometry()
+        self.playBadge.move(
+            rect.center().x() - self._BADGE_SIZE // 2,
+            rect.center().y() - self._BADGE_SIZE // 2,
+        )
+        self.playBadge.raise_()
+
+
+class VideoStrip(_CardGridBase):
+    """收藏集视频选择条：多栏视频卡，点击切换播放（挂在播放器右侧）。
+
+    列数按可用宽度动态定（至少一栏、尽量多栏），与其他网格「按整行均分铺满」的
+    做法一致；懒加载缩略图 / 主题跟随 / 点击下标全部沿用 `_CardGridBase`。
+    卡片高度按竖版 3:4 反推。
+    """
+
+    videoClicked = Signal(int)
+
+    _card_class = VideoCard
+    _min_cell = QSize(64, 96)
+    _TARGET_CELL_W = 120  # 每栏期望宽度：可用宽度够几个就排几栏
+    # 为竖向滚动条固定预留的宽度（含边框），见 _cell_size 的注释
+    _SCROLL_RESERVE = 22
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWrapping(True)  # 排满一行自动折行，整体竖向滚动
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.itemClickedAt.connect(lambda i, _: self.videoClicked.emit(i))
+
+    @staticmethod
+    def _cover_url(item):
+        # item = (name, 封面 url)
+        if isinstance(item, tuple):
+            return item[1] if len(item) > 1 else None
+        return None
+
+    def columns(self) -> int:
+        """栏数：按期望栏宽尽量多排，但只要塞得下就**至少两栏**（单栏读着太累）；
+        项目数少于栏数时收敛到项目数，免得卡片挤在左边、右侧空一大片。"""
+        avail = self.width() - self._SCROLL_RESERVE
+        cols = max(1, avail // self._TARGET_CELL_W)
+        if avail >= 2 * self._min_cell.width():
+            cols = max(2, cols)
+        n = self.count()
+        return min(cols, n) if n else cols
+
+    def _cell_size(self) -> QSize:
+        # 按控件宽度算而不是 viewport 宽度：这里卡片高度正比于宽度，若跟着 viewport
+        # 走会出现「滚动条出现 → 变窄 → 变矮 → 不再需要滚动条 → 变宽」的来回抖动
+        # （基类把 verticalScrollBar().rangeChanged 接到了 _layout_items）。
+        # 索性固定预留滚动条宽度，单元格尺寸与滚动条有无无关。
+        w = self.width()
+        if w <= 0:
+            return self._min_cell
+        avail = max(self._min_cell.width(), w - self._SCROLL_RESERVE)
+        cell_w = max(self._min_cell.width(), avail // self.columns())
+        cell_h = round(cell_w * 4 / 3) + DetailCard._TEXT_H + 6  # 竖版 3:4 + 布局边距
+        # 项目极少时单元格会算得比视口还高，封顶到视口高度；多出来的横向空间由
+        # DetailCard 的图片按钮居中吸收（同 DressDetailGrid 的做法）
+        vh = self.viewport().height()
+        if vh > 0:
+            cell_h = min(cell_h, max(self._min_cell.height(), vh))
+        return QSize(cell_w, cell_h)
+
+    def set_videos(self, items) -> None:
+        """items: [(name, 封面 url), ...]，下标与播放器的视频列表一一对应。"""
+        self.set_cards(items)
+
+    def set_active(self, index: int) -> None:
+        """高亮正在播放的卡片，并滚动到可见。"""
+        for i in range(self.count()):
+            card = self.itemWidget(self.item(i))
+            if card is not None and hasattr(card, "set_active"):
+                card.set_active(i == index)
+        if 0 <= index < self.count():
+            self.scrollToItem(self.item(index))
 
 
 class QueueCard(_SpinnerMixin, QWidget):

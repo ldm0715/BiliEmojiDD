@@ -4,10 +4,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from biliemoji import Dress
+from biliemoji.sanitize import sanitize_filename
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView,
-    QListWidgetItem,
+    QHBoxLayout,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -20,12 +20,11 @@ from qfluentwidgets import (
     FluentIcon,
     InfoBadge,
     InfoBarPosition,
-    ListWidget,
+    Pivot,
     PrimaryPushButton,
     ProgressBar,
     PushButton,
     SearchLineEdit,
-    SimpleCardWidget,
     SubtitleLabel,
     TransparentPushButton,
 )
@@ -55,9 +54,14 @@ from app.components.page_scaffold import (
     title_row,
 )
 from app.components.task import run_task
-from app.components.widgets import DressDetailGrid, DressGrid
+from app.components.video_cache import video_cache
+from app.components.video_player import CollectionVideoPlayer
+from app.components.widgets import DressDetailGrid, DressGrid, VideoStrip
 
 _SEARCH_NUM = 30
+_STRIP_MIN_WIDTH = 220  # 视频选择条最小宽度（保证窄窗口下也排得下两栏）
+_PLAYER_STRETCH = 1  # 视频页左右分配：播放器 1 份
+_STRIP_STRETCH = 2  # 选择条 2 份（竖屏画面用不了太多宽度）
 
 
 class DressPage(QWidget):
@@ -67,6 +71,7 @@ class DressPage(QWidget):
         self._detail_summary = None  # 详情当前收藏集（入队按钮状态依据，避免魔法下标）
         self._last_summaries = None  # 最近一次搜索结果原始列表（勾选框实时过滤用）
         self._detail_items: list[tuple[str, str]] = []  # 详情图片 (name, url)
+        self._detail_videos: list[tuple[str, str]] = []  # 详情视频 (name, 视频 url)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -97,6 +102,8 @@ class DressPage(QWidget):
         self.grid.summaryClicked.connect(self._open_detail)
         self.grid.selectionChanged.connect(self._update_select_label)
         self.detailGrid.imageClicked.connect(self._open_image_viewer)
+        self.videoStrip.videoClicked.connect(self._play_video)
+        self.videoPlayer.currentChanged.connect(self.videoStrip.set_active)
         # 队列变化时同步详情页按钮状态（加入/删除/清空后即时刷新）
         download_queue.changed.connect(self._sync_queue_btn)
 
@@ -192,32 +199,60 @@ class DressPage(QWidget):
         self.headerCard.add_widget(self.detailBar)
         layout.addWidget(self.headerCard)
 
-        # 预览卡：图片网格
+        # 预览卡：卡头挂 Pivot 切换「静态图片 / 动态视频」，内容区一个 QStackedWidget
         self.previewCard = SectionCard("内容预览", self.detailPage)
+        self.contentPivot = Pivot(self.previewCard)
+        self.contentStack = QStackedWidget(self.previewCard)
+
         self.detailGrid = DressDetailGrid(self.previewCard)
-        self.previewCard.add_widget(self.detailGrid)
-        layout.addWidget(self.previewCard, 1)
 
-        # 视频卡：折叠标题（默认收起）+ 列表，无视频时整卡隐藏
-        self.videoCard = SimpleCardWidget(self.detailPage)
-        video_box = QVBoxLayout(self.videoCard)
-        video_box.setContentsMargins(12, 8, 12, 12)
-        video_box.setSpacing(8)
-        self.videoToggle = TransparentPushButton(
-            FluentIcon.CHEVRON_RIGHT, "视频内容", self.videoCard
+        # 视频页：左播放器 + 右选择条，宽度按 1:2 静态分配。
+        # **不要**改成「在 resizeEvent 里按画面比例算播放器宽度」——拖拽窗口时每帧会
+        # 触发多轮「改宽 → 重新布局 → 又一次 resize → fitInView + 选择条重排」，
+        # 实测画面畸形 + 明显卡顿。静态 stretch 下竖屏视频两侧的黑边已经很少。
+        self.videoPane = QWidget(self.previewCard)
+        video_box = QHBoxLayout(self.videoPane)
+        video_box.setContentsMargins(0, 0, 0, 0)
+        video_box.setSpacing(12)
+        self.videoPlayer = CollectionVideoPlayer(self.videoPane)
+        self.videoStrip = VideoStrip(self.videoPane)
+        self.videoStrip.setMinimumWidth(_STRIP_MIN_WIDTH)
+        video_box.addWidget(self.videoPlayer, _PLAYER_STRETCH)
+        video_box.addWidget(self.videoStrip, _STRIP_STRETCH)
+
+        self.contentStack.addWidget(self.detailGrid)
+        self.contentStack.addWidget(self.videoPane)
+        self.contentPivot.addItem(
+            routeKey="image", text="静态图片", onClick=self._show_image_tab
         )
-        self.videoToggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.videoToggle.clicked.connect(self._toggle_video)
-        self.videoToggle.hide()
-        video_box.addWidget(self.videoToggle, 0, Qt.AlignmentFlag.AlignLeft)
+        self.contentPivot.addItem(
+            routeKey="video", text="动态视频", onClick=self._show_video_tab
+        )
+        self.previewCard.add_header_widget(self.contentPivot)
+        self.previewCard.add_widget(self.contentStack)
+        layout.addWidget(self.previewCard, 1)
+        # setCurrentItem 不会触发 onClick，两句都要写（同 emoji_page 的 Pivot 用法）
+        self.contentPivot.setCurrentItem("image")
+        self.contentStack.setCurrentWidget(self.detailGrid)
 
-        self.videoList = ListWidget(self.videoCard)
-        self.videoList.setMaximumHeight(150)
-        self.videoList.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.videoList.hide()
-        video_box.addWidget(self.videoList)
-        self.videoCard.hide()
-        layout.addWidget(self.videoCard)
+    # ---- 内容分页 ----
+    def _show_image_tab(self) -> None:
+        # 同步 Pivot：这两个槽也会被程序化调用（换收藏集、断言脚本），
+        # 只有走点击时 Pivot 才会自己移动指示条
+        self.contentPivot.setCurrentItem("image")
+        self.contentStack.setCurrentWidget(self.detailGrid)
+        self.videoPlayer.release()  # 离开视频页即停播，不留后台声音
+
+    def _show_video_tab(self) -> None:
+        self.contentPivot.setCurrentItem("video")
+        self.contentStack.setCurrentWidget(self.videoPane)
+        # 只在「没在播也没在缓冲」时加载：离开再回来会重新播上次选中的那个，
+        # 而正在播时再点一次 tab 不该重头来
+        if self._detail_videos and self.videoPlayer.is_idle():
+            self._play_video(max(0, self.videoPlayer.current_index()))
+
+    def _play_video(self, index: int) -> None:
+        self.videoPlayer.play(index)
 
     # ---- 搜索 ----
     def _on_search(self) -> None:
@@ -262,6 +297,7 @@ class DressPage(QWidget):
 
     def _go_back(self) -> None:
         self._detail_summary = None
+        self.videoPlayer.release()
         self._sync_queue_btn()
         self.stacked.setCurrentWidget(self.searchPage)
 
@@ -285,12 +321,9 @@ class DressPage(QWidget):
         self.detailName.setText(summary.name or "收藏集")
         self.detailInfo.setText("")
         self._detail_items = []
+        self._detail_videos = []
         self.detailGrid.set_items([])
-        self.videoToggle.hide()
-        self.videoToggle.setIcon(FluentIcon.CHEVRON_RIGHT)
-        self.videoList.clear()
-        self.videoList.hide()
-        self.videoCard.hide()  # 视频卡随 videoToggle 一起显隐
+        self._reset_video_tab()
         self.detailBtn.setEnabled(False)
         self.stacked.setCurrentWidget(self.detailPage)
 
@@ -307,28 +340,28 @@ class DressPage(QWidget):
 
     def _show_detail(self, collection) -> None:
         items = []
-        videos = []  # [(card_name, url), ...]
+        videos = []  # [(card_name, 视频 url), ...]
+        covers = []  # [(card_name, 封面 url), ...]，下标与 videos 一一对应
         for item in collection.item_list:
             if item.card_img_download:
                 items.append((item.card_name or "", item.card_img_download))
-            for url in item.video_list:
-                videos.append((item.card_name or "", url))
+            # 每项只取第一个视频：与 download_collection_batch 建任务、
+            # content_meta.collection_meta 计数的口径完全一致
+            if item.video_list:
+                videos.append((item.card_name or "", item.video_list[0]))
+                covers.append((item.card_name or "", item.card_img_download or ""))
         # 动态尺寸网格：卡片随视口/数量撑满区域
         self._detail_items = items
+        self._detail_videos = videos
         self.detailGrid.set_items(items)
-        self.videoList.clear()
-        for name, url in videos:
-            row = QListWidgetItem(f"▶ {name}")
-            row.setData(Qt.ItemDataRole.UserRole, url)
-            self.videoList.addItem(row)
-        if videos:
-            self.videoToggle.setText(f"视频内容（{len(videos)} 个）")
-            self.videoToggle.setIcon(FluentIcon.CHEVRON_RIGHT)
-            self.videoToggle.show()
-        else:
-            self.videoToggle.hide()
-        self.videoCard.setVisible(bool(videos))  # 无视频时整卡隐藏
-        self.videoList.hide()
+        self._reset_video_tab()
+        # 这个收藏集已经整包下载过的话，直接播本地文件，省掉重新下载
+        self._adopt_downloaded_videos(collection)
+        self.videoPlayer.set_videos(videos)
+        self.videoStrip.set_videos(covers)
+        self.contentPivot.widget("image").setText(f"静态图片 {len(items)}")
+        self.contentPivot.widget("video").setText(f"动态视频 {len(videos)}")
+        self.contentPivot.widget("video").setEnabled(bool(videos))
         self.detailInfo.setText(
             f"名称: {collection.name or ''} · 图片 {len(items)} 个 · 视频 {len(videos)} 个"
         )
@@ -340,6 +373,30 @@ class DressPage(QWidget):
         self._sync_queue_btn()
         self._refresh_downloaded(collection)
 
+    def _reset_video_tab(self) -> None:
+        """回到「静态图片」页并停播——换收藏集时别继承上一个的播放状态。"""
+        self._show_image_tab()  # 停播 + 切回图片页 + 同步 Pivot 指示条
+        self.videoPlayer.set_videos([])  # 顺带把当前下标重置成 -1
+        self.videoStrip.set_videos([])
+
+    def _adopt_downloaded_videos(self, collection) -> None:
+        """已下载过的收藏集：把本地 .mp4 登记进 video_cache，播放时零等待。
+
+        目录与文件名跟 `download_collection_batch` 完全一致；同时认 summary 名与
+        collection 名两个目录，与 `_refresh_downloaded` 的兼容逻辑一致。
+        """
+        folders = []
+        if self._detail_summary is not None:
+            folders.append(collection_download_dir(self._detail_summary))
+        folders.append(collection_download_dir(collection))
+        for name, url in self._detail_videos:
+            filename = f"{sanitize_filename(name or 'unknown')}.mp4"
+            for folder in folders:
+                path = folder / filename
+                if path.is_file():
+                    video_cache.remember(url, path)
+                    break
+
     def _refresh_downloaded(self, collection=None) -> None:
         """已下载判定：新下载按 summary 名建目录（与卡片徽标一致），
         旧版本按 certain_lottery_typed 取回的收藏集名建目录，两者都认。"""
@@ -349,13 +406,6 @@ class DressPage(QWidget):
         if collection is not None:
             folders.append(collection_download_dir(collection))
         self.downloadedLabel.setVisible(any(downloaded_exists(f) for f in folders))
-
-    def _toggle_video(self) -> None:
-        show = not self.videoList.isVisible()
-        self.videoList.setVisible(show)
-        self.videoToggle.setIcon(
-            FluentIcon.CHEVRON_DOWN_MED if show else FluentIcon.CHEVRON_RIGHT
-        )
 
     # ---- 图片查看器 ----
     def _open_image_viewer(self, index: int) -> None:

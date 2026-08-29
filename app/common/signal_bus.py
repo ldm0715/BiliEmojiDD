@@ -12,6 +12,8 @@ class SignalBus(QObject):
     - thumbLoaded：主线程发射，携带已缓存的 QPixmap，广播给所有网格/卡片。
     - contentMetaRaw / contentMetaLoaded：下载项内容概要（图片/视频数），同样是
       worker 发原始信号、主线程写完缓存再广播；载荷 None 表示「取不到」。
+    - videoRawReady / videoReady：收藏集视频下载到本地临时目录，结构同上，
+      载荷为本地文件路径字符串，None 表示「取不到」。
     """
 
     thumbRawLoaded = Signal(str, object)  # url, QImage（worker 线程）
@@ -19,6 +21,8 @@ class SignalBus(QObject):
     thumbLoaded = Signal(str, object)  # url, QPixmap（主线程）
     contentMetaRaw = Signal(object, object)  # item_key, ContentMeta|None（worker 线程）
     contentMetaLoaded = Signal(object, object)  # item_key, ContentMeta|None（主线程）
+    videoRawReady = Signal(str, object)  # url, 本地路径 str|None（worker 线程）
+    videoReady = Signal(str, object)  # url, 本地路径 str|None（主线程）
     configChanged = Signal()
 
 

@@ -83,7 +83,9 @@ UI 线程（主线程）              后台线程（QThreadPool / Python 线程
 
 **全部表情包**：`_AllPackagesTab._on_fetch` → 优先读本地缓存 → 未命中则 `run_task(Emoji.all_packages())` → 成功后 `cache.save_all_packages_cache` 落盘 → `_repopulate` 本地关键词过滤 + `PageBar` 分页（每页 20）→ 点击卡片 → `run_task(Emoji.certain_emoji_typed(id))` 拉完整详情（all_packages 只含元信息）。
 
-**收藏集搜索与详情**：`DressPage` → `run_task(search_dress_typed)` → `DressGrid` 四列卡片（类别徽标读 `dress_helpers`，绕开 biliemoji `is_collection` bug）→ 点击 → `dlc_ids(summary)` 取字符串 id → `run_task(certain_lottery_typed)` → `DressDetailGrid`（卡片尺寸按视口/数量动态计算）+ 视频折叠列表。
+**收藏集搜索与详情**：`DressPage` → `run_task(search_dress_typed)` → `DressGrid` 四列卡片（类别徽标读 `dress_helpers`，绕开 biliemoji `is_collection` bug）→ 点击 → `dlc_ids(summary)` 取字符串 id → `run_task(certain_lottery_typed)` → 内容预览卡按 `Pivot` 分两页：`DressDetailGrid`（卡片尺寸按视口/数量动态计算）与「动态视频」（`CollectionVideoPlayer` 内嵌播放器 + `VideoStrip` 缩略图选择条）。
+
+**收藏集视频播放**：`video_cache` 独立线程池（2）→ `Downloader` 下到会话临时目录（显式 proxies）→ `signal_bus.videoRawReady`（worker）→ 主线程写缓存 → `videoReady` → `CollectionVideoPlayer` 校验 `_pending_url` 后 `setVideo(QUrl.fromLocalFile(...))`。不流式播远程 URL：`QMediaPlayer` 走系统代理、不读应用内代理设置（详见 `docs/collection_video.md`）。
 
 **混合下载队列**：表情包 / 收藏集页多选「加入下载」→ `download_queue.add_many`（按 `item_kind`/`item_key` 去重）→ 下载页 `QueueList` 统一横向卡片 → 「下载选中」→ `download_mixed_batch` 按类型拆分顺序执行两子批并合并结果。
 

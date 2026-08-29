@@ -83,3 +83,14 @@ class SectionCard(HeaderCardWidget):
     def add_widget(self, widget: QWidget) -> None:
         widget.setParent(self.view)
         self.viewLayout.addWidget(widget)
+
+    def add_header_widget(self, widget: QWidget) -> None:
+        """把控件挂到卡头右侧（如内容分页的 Pivot）。
+
+        `HeaderCardWidget.headerLayout` 里只有 `headerLabel`，先撑开再追加即靠右排。
+        卡头高度恢复成库里默认的 48：本类为省空间收到了 40，`PivotItem` 放不下。
+        """
+        widget.setParent(self.headerView)
+        self.headerView.setFixedHeight(48)
+        self.headerLayout.addStretch(1)
+        self.headerLayout.addWidget(widget)

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # 项目根
@@ -18,10 +19,13 @@ from qfluentwidgets import Theme, setTheme
 
 from app.components.content_meta import content_meta
 from app.components.download_queue import download_queue
+from app.components.video_cache import video_cache
 from app.components.widgets import DressCard, PackageCard, QueueCard
 
 # 队列卡片会为可见项懒加载「内容数量」，假数据会排一堆超时请求把脚本挂住
 content_meta.set_enabled(False)
+# 视频页同理：假 URL 会排一堆超时下载任务
+video_cache.set_enabled(False)
 
 OUT = Path(__file__).resolve().parent.parent / "screenshots"
 OUT.mkdir(exist_ok=True)
@@ -149,8 +153,15 @@ def shot_pages(theme: Theme, tag: str) -> None:
     dp._detail_summary = _FakeSummary("测试收藏集")
     dp.stacked.setCurrentWidget(dp.detailPage)
     dp.detailName.setText("测试收藏集")
-    dp._show_detail(_FakeCollection())
+    dp._show_detail(_FakeCollection(videos=5))
     shot(dp, f"dress_page_detail_{tag}.png")
+    dp._show_video_tab()  # 动态视频页（播放器区域是黑底，选择条在下方）
+    # Pivot 指示条是属性动画，光 processEvents 不推进时间，截图会拍到动画起点
+    for _ in range(20):
+        app.processEvents()
+        time.sleep(0.01)
+    shot(dp, f"dress_page_video_{tag}.png")
+    dp.videoPlayer.release()
     dp.close()
 
     # 下载页：队列非空
