@@ -16,6 +16,7 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool
 from PySide6.QtGui import QImage, QPixmap, QPixmapCache
 
 from app.common.config import cfg
+from app.common.proxy import parse_proxy
 from app.common.signal_bus import signal_bus
 from app.components.disk_cache import image_cache
 
@@ -27,18 +28,20 @@ _PIXMAP_CACHE_KB = 64 * 1024
 class ThumbLoadTask(QRunnable):
     """取一个图片的字节（磁盘缓存优先）并解码为 QImage，经 signal_bus 返回。"""
 
-    def __init__(self, url: str, cookie: str) -> None:
+    def __init__(self, url: str, cookie: str, proxies: dict | None) -> None:
         super().__init__()
         self.setAutoDelete(False)
         self._url = url
         self._cookie = cookie
+        self._proxies = proxies
 
     def run(self) -> None:
         image = None
         try:
             data = image_cache.get(self._url)
             if data is None:
-                client = BiliClient(cookie=self._cookie)
+                # proxies 显式传给 BiliClient，与其余联网入口一致
+                client = BiliClient(cookie=self._cookie, proxies=self._proxies)
                 data = client.get_bytes(self._url, timeout=15)
                 image_cache.put(self._url, data)
             img = QImage()
@@ -78,7 +81,10 @@ class ThumbManager(QObject):
         if url in self._inflight:
             return
         self._inflight.add(url)
-        self._pool.start(ThumbLoadTask(url, cfg.cookie.value))
+        # cookie / proxies 都在主线程读一次再交给 worker（worker 不碰 cfg）
+        self._pool.start(
+            ThumbLoadTask(url, cfg.cookie.value, parse_proxy(cfg.proxy.value))
+        )
 
     def _on_raw_loaded(self, url: str, image: QImage) -> None:
         """worker 线程解码完成，主线程转 QPixmap 并缓存（线程规则）。"""

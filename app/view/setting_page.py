@@ -43,12 +43,20 @@ from qfluentwidgets import (
 from app.common.config import APP_CONFIG_DIR, APP_VERSION, cfg
 from app.common.exception import show_bili_error
 from app.common.notify import notify_success, notify_warning
-from app.common.proxy import build_proxy, parse_proxy, proxy_env, split_proxy
+from app.common.proxy import (
+    PROXY_SCHEMES,
+    build_proxy,
+    is_socks,
+    parse_proxy,
+    pysocks_available,
+    split_proxy_auth,
+)
 from app.common.resource import app_icon
 from app.common.signal_bus import signal_bus
 from app.common.theme import SECONDARY_TEXT, bind_theme
 from app.components.disk_cache import MB, clear_all, total_size
 from app.components.download_runner import open_in_explorer
+from app.components.proxy_probe import probe_proxy
 from app.components.task import run_task
 
 _THEMES = [Theme.AUTO, Theme.LIGHT, Theme.DARK]
@@ -274,9 +282,12 @@ class SettingPage(QWidget):
 
         self.protoCombo = ComboBox(group)
         # qfluentwidgets addItem(text, icon, userData)：第二位置参是 icon，userData 须用关键字
+        # 注意这里选的是**代理自身**说什么协议，不是被代理流量的协议
         self.protoCombo.addItem("HTTP", userData="http")
         self.protoCombo.addItem("HTTPS", userData="https")
-        self.protoCombo.setFixedWidth(105)
+        self.protoCombo.addItem("SOCKS5", userData="socks5")
+        self.protoCombo.addItem("SOCKS5 (远程 DNS)", userData="socks5h")
+        self.protoCombo.setFixedWidth(150)
         self.hostEdit = LineEdit(group)
         self.hostEdit.setPlaceholderText("IP / 域名")
         self.hostEdit.setFixedWidth(150)
@@ -284,27 +295,51 @@ class SettingPage(QWidget):
         self.portSpin.setRange(1, 65535)
         # SpinBox 右侧上下按钮占掉约 64px，宽度给少了数字会被裁没
         self.portSpin.setFixedWidth(130)
+        self.proxyTestBtn = PushButton("测试", group)
         self.proxyCard = _WidgetSettingCard(
             FluentIcon.GLOBE,
             "代理",
-            "留空不使用代理",
-            [self.protoCombo, self.hostEdit, self.portSpin],
+            "协议指代理自身的协议；留空主机名不使用代理",
+            [self.protoCombo, self.hostEdit, self.portSpin, self.proxyTestBtn],
             group,
         )
         self.proxyCard.setToolTip(
-            "代理仅支持 HTTP/HTTPS（socks 未安装 PySocks）；端口 1–65535，"
-            "留空主机名表示不使用代理。"
+            "「协议」选的是代理自身说什么协议，不是被代理流量的协议。\n"
+            "B 站接口全是 HTTPS，走 HTTP 代理时要靠 CONNECT 建隧道——\n"
+            "只会转发明文 http:// 的代理会报「Tunnel connection failed」，用不了。\n"
+            "SOCKS5 (远程 DNS) 把域名解析也交给代理做。\n"
+            "「测试」按当前填写的值发一次真实请求——ping 通不代表该端口上有可用代理。"
+        )
+
+        # 需要认证的代理：用户名 / 密码拼进地址（scheme://user:pass@host:port），
+        # 不填就是匿名代理。密码用 PasswordLineEdit，和 Cookie 一样默认打码。
+        self.proxyUserEdit = LineEdit(group)
+        self.proxyUserEdit.setPlaceholderText("用户名（可留空）")
+        self.proxyUserEdit.setFixedWidth(150)
+        self.proxyPassEdit = PasswordLineEdit(group)
+        self.proxyPassEdit.setPlaceholderText("密码（可留空）")
+        self.proxyPassEdit.setFixedWidth(150)
+        self.proxyAuthCard = _WidgetSettingCard(
+            FluentIcon.PEOPLE,
+            "代理认证",
+            "代理要求认证时才填；留空表示匿名代理",
+            [self.proxyUserEdit, self.proxyPassEdit],
+            group,
         )
         # 组件库风格的提示气泡（原生 tooltip 不跟主题）
         self.proxyCard.installEventFilter(
             ToolTipFilter(self.proxyCard, 500, ToolTipPosition.TOP)
         )
 
-        scheme, host, port = split_proxy(cfg.proxy.value)
-        idx = self.protoCombo.findData(scheme if scheme in ("http", "https") else "http")
+        parts = split_proxy_auth(cfg.proxy.value)
+        idx = self.protoCombo.findData(
+            parts.scheme if parts.scheme in PROXY_SCHEMES else "http"
+        )
         self.protoCombo.setCurrentIndex(max(idx, 0))
-        self.hostEdit.setText(host)
-        self.portSpin.setValue(port if port > 0 else 7890)
+        self.hostEdit.setText(parts.host)
+        self.portSpin.setValue(parts.port if parts.port > 0 else 7890)
+        self.proxyUserEdit.setText(parts.username)
+        self.proxyPassEdit.setText(parts.password)
 
         self.threadSpin = SpinBox(group)
         self.threadSpin.setRange(1, 16)
@@ -328,7 +363,13 @@ class SettingPage(QWidget):
         )
 
         group.addSettingCards(
-            [self.dirCard, self.proxyCard, self.threadCard, self.saveDownloadCard]
+            [
+                self.dirCard,
+                self.proxyCard,
+                self.proxyAuthCard,
+                self.threadCard,
+                self.saveDownloadCard,
+            ]
         )
         self.expandLayout.addWidget(group)
         self.downloadGroup = group
@@ -336,6 +377,64 @@ class SettingPage(QWidget):
         self.browseBtn.clicked.connect(self._on_browse)
         self.openDirBtn.clicked.connect(self._on_open_dir)
         self.downloadSaveBtn.clicked.connect(self._on_save_download)
+        self.proxyTestBtn.clicked.connect(self._on_test_proxy)
+
+    def _current_proxy(self) -> str | None:
+        """按当前控件值拼代理地址；不合法时弹提示并返回 None。"""
+        scheme = self.protoCombo.currentData() or "http"
+        host = self.hostEdit.text().strip()
+        if host and ("://" in host or " " in host):
+            notify_warning(
+                "无效主机名",
+                "主机名不能包含协议前缀或空格，请分别填写协议 / IP / 端口",
+                parent=self,
+                position=InfoBarPosition.TOP_RIGHT,
+                duration=6000,
+            )
+            return None
+        if host and is_socks(scheme) and not pysocks_available():
+            notify_warning(
+                "缺少 socks 依赖",
+                "socks 代理需要 PySocks，请执行 uv sync 后重启应用；"
+                "或先把协议改成 HTTP",
+                parent=self,
+                position=InfoBarPosition.TOP_RIGHT,
+                duration=8000,
+            )
+            return None
+        return build_proxy(
+            scheme,
+            host,
+            self.portSpin.value(),
+            self.proxyUserEdit.text().strip(),
+            self.proxyPassEdit.text(),
+        )  # 主机名为空 -> 不使用代理
+
+    def _on_test_proxy(self) -> None:
+        """按当前填写的值发一次真实请求——ping 通不代表那个端口上有代理。"""
+        proxy_text = self._current_proxy()
+        if proxy_text is None:
+            return
+        self.proxyTestBtn.setEnabled(False)
+
+        def task():
+            return probe_proxy(proxy_text)
+
+        run_task(
+            task,
+            on_success=self._on_proxy_ok,
+            on_error=lambda e: show_bili_error(e, self),
+            on_finished=lambda ok: self.proxyTestBtn.setEnabled(True),
+        )
+
+    def _on_proxy_ok(self, message: str) -> None:
+        notify_success(
+            "代理可用",
+            message,
+            parent=self,
+            position=InfoBarPosition.TOP_RIGHT,
+            duration=5000,
+        )
 
     def _on_browse(self) -> None:
         start = self.dirEdit.text().strip() or str(Path.home())
@@ -358,23 +457,12 @@ class SettingPage(QWidget):
                 position=InfoBarPosition.TOP_RIGHT,
             )
             return
-        scheme = self.protoCombo.currentData() or "http"
-        host = self.hostEdit.text().strip()
-        if host and ("://" in host or " " in host):
-            notify_warning(
-                "无效主机名",
-                "主机名不能包含协议前缀或空格，请分别填写协议 / IP / 端口",
-                parent=self,
-                position=InfoBarPosition.TOP_RIGHT,
-                duration=6000,
-            )
+        proxy_text = self._current_proxy()
+        if proxy_text is None:  # 校验未过，提示已弹
             return
-        port = self.portSpin.value()
-        proxy_text = build_proxy(scheme, host, port)  # 主机名为空 -> 不使用代理
         qconfig.set(cfg.download_dir, directory)
         qconfig.set(cfg.proxy, proxy_text)
         qconfig.set(cfg.max_workers, self.threadSpin.value())
-        proxy_env.apply(proxy_text)
         signal_bus.configChanged.emit()
         notify_success(
             "已保存",

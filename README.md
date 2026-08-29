@@ -46,6 +46,8 @@ uv run python main.py
 - [收藏集视频预览](docs/collection_video.md) — 内容分页 Pivot、内嵌播放器 + 缩略图选择条、临时缓存与黑背景坑
 - [搜索历史 + 磁盘缓存 + 应用标识](docs/search_and_cache.md) — 浮层历史面板、图片/接口落盘缓存与容量设置、窗口图标与版本号
 - [主页（欢迎页）](docs/home_page.md) — 英雄卡 + 功能入口卡 + 快速上手 / 关于 / 最近搜索、静态展示图方案、性能与布局坑
+- [代理](docs/proxy_diagnostics.md) — 只走 `proxies=` 参数、代理认证与 SOCKS、ProxyError 成因表与「测试」按钮
+- [应用外壳](docs/app_shell.md) — 全局字体（woff2 → ttf、qfluentwidgets `getFont` 补丁）、消息提示统一挂内容区、切页去掉位移动画
 
 ## Cookie
 

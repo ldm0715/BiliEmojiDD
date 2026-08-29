@@ -17,15 +17,17 @@ def main() -> int:
     app = QApplication(sys.argv)
 
     # 先创建 QApplication 再导入 MainWindow，确保控件/信号在主线程构造
-    from app.common.proxy import proxy_env
+    from app.common.font import apply_app_font
     from app.common.resource import app_icon
+
+    # 字体必须在导入 MainWindow 之前应用：addApplicationFont 要有 QGuiApplication，
+    # 而给 qfluentwidgets 打的 getFont 补丁要赶在页面控件构造之前生效
+    apply_app_font(app)
+
     from app.MainWindow import MainWindow
 
     app.setWindowIcon(app_icon())  # 任务栏 / 弹窗继承应用图标
     setTheme(cfg.theme.value)
-    # 快照原始代理环境变量，再应用应用内配置（清空时能恢复原值）
-    proxy_env.remember()
-    proxy_env.apply(cfg.proxy.value)
     window = MainWindow()
     window.show()
     return app.exec()

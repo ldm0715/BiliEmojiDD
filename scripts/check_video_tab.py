@@ -444,6 +444,56 @@ check(
     f"播放器与选择条都有高度（{dress.videoPlayer.height()} / {dress.videoStrip.height()}）",
 )
 
+print("== 8. 放大再缩小不会把版式顶高（sceneRect 单调增长的回归）==")
+dress._show_detail(_Collection(images=5, videos=3))
+dress.resize(1000, 760)
+settle(8)
+dress._show_video_tab()
+settle(8)
+base = {
+    "view.hint": dress.videoPlayer.view.sizeHint(),
+    "view.min": dress.videoPlayer.view.minimumSizeHint(),
+    "player.hint": dress.videoPlayer.sizeHint(),
+    "player.min": dress.videoPlayer.minimumSizeHint(),
+    "page.hint": dress.sizeHint(),
+    "page.min": dress.minimumSizeHint(),
+}
+dress.resize(1800, 1050)
+settle(8)
+dress.resize(1000, 760)
+settle(8)
+# 真实播放时视频到位会让几何失效；离屏用 updateGeometry 手动复现这一刻——
+# 场景矩形没钉住的话，虚高的 sizeHint 就是在这里灌进上层布局的
+dress.videoPlayer.view.updateGeometry()
+dress.videoPlayer.updateGeometry()
+settle(8)
+after = {
+    "view.hint": dress.videoPlayer.view.sizeHint(),
+    "view.min": dress.videoPlayer.view.minimumSizeHint(),
+    "player.hint": dress.videoPlayer.sizeHint(),
+    "player.min": dress.videoPlayer.minimumSizeHint(),
+    "page.hint": dress.sizeHint(),
+    "page.min": dress.minimumSizeHint(),
+}
+for key, before_size in base.items():
+    now = after[key]
+    check(
+        now == before_size,
+        f"{key} 放大缩小后回到原值（{before_size.width()}x{before_size.height()} -> "
+        f"{now.width()}x{now.height()}）",
+    )
+scene = dress.videoPlayer.view.sceneRect()
+view_size = dress.videoPlayer.view.size()
+check(
+    round(scene.width()) == view_size.width()
+    and round(scene.height()) == view_size.height(),
+    f"场景矩形跟着视口走而不是只涨不落（scene={round(scene.width())}x"
+    f"{round(scene.height())}, view={view_size.width()}x{view_size.height()}）",
+)
+dress.resize(820, 600)
+settle(8)
+check(dress.height() == 600, f"仍能缩回 600 高（实际 {dress.height()}）")
+
 dress.videoPlayer.release()
 dress.close()
 cfg.download_dir.value = orig_download_dir

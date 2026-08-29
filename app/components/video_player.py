@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, QSizeF, Qt, QUrl, Signal
+from PySide6.QtCore import QPointF, QRectF, QSize, QSizeF, Qt, QUrl, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QDialog, QGraphicsView, QVBoxLayout, QWidget
 from qfluentwidgets import (
@@ -31,15 +31,28 @@ from app.components.video_cache import video_cache
 _SPINNER_SIZE = 40
 _PORTRAIT_RATIO = 3 / 4  # 收藏集动态卡是竖版；元数据还没到位时按它估画面宽度
 _BAR_ROW_H = 108  # 控制条一行占的高度（playBar 固定 102 + 布局间距 6）
+# 画面区参与布局协商时报的尺寸：一个中性的小常量。真实高度由外层布局的 stretch 决定，
+# 让 QGraphicsView 自己报尺寸只会把单调增长的场景矩形捅进布局（见 _VideoView 注释）。
+_VIEW_HINT = QSize(240, 180)
+_VIEW_MIN = QSize(80, 60)
 
 
 class _VideoView(VideoWidget):
-    """两处改造，都是为了让播放控制条从画面里挪出去（见 `CollectionVideoPlayer`）。
+    """三处改造，都是为了让画面区老老实实待在外层布局给的格子里。
 
     1. 场景背景钉成纯黑，抵消上游的 `CompositionMode_Difference`（见模块注释）；
     2. 覆写 `resizeEvent` / `enterEvent` / `leaveEvent`：上游把 `playBar` 绝对定位在
        画面底部、并按 hover 淡入淡出——控制条盖在画面上会挡住内容。这里不再摆它、
        也不再淡出，由外层布局把它排在画面下方常显。
+    3. **不参与尺寸协商**：钉死场景矩形 + 覆写 `sizeHint` / `minimumSizeHint`。
+
+    第 3 点是「视频页把窗口顶高」的根因修复，别改回去：`QGraphicsScene` 没显式设过
+    sceneRect 时返回的是 `growingItemsBoundingRect`——**只涨不落**；而
+    `QGraphicsView.sizeHint()` 正是 `transform.mapRect(sceneRect())`。上游
+    `resizeEvent` 里 `videoItem.setSize(self.size())` 会把窗口放大时的尺寸永久写进
+    那个矩形，等到播放器真的加载视频（`updateGeometry` 生效）时，这个虚高的 sizeHint
+    就一路顶到 `videoPane → contentStack → previewCard → detailPage`：实测收藏集详情页
+    的 sizeHint 从 663x707 涨到 853x967 且**缩窗口也回不来**。
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -48,12 +61,24 @@ class _VideoView(VideoWidget):
         # 构造里 FluentStyleSheet.MEDIA_PLAYER.apply(self) 已把自己注册进
         # styleSheetManager，每次切主题都会 updateStyleSheet 把自定义样式表冲掉
         self.setBackgroundBrush(QColor(0, 0, 0))
+        self._pin_scene_rect()
+
+    def _pin_scene_rect(self) -> None:
+        """把场景矩形钉成当前视口大小，切断 growingItemsBoundingRect 的单调增长。"""
+        self.graphicsScene.setSceneRect(QRectF(QPointF(0, 0), QSizeF(self.size())))
+
+    def sizeHint(self) -> QSize:
+        return _VIEW_HINT
+
+    def minimumSizeHint(self) -> QSize:
+        return _VIEW_MIN
 
     def resizeEvent(self, e) -> None:
         # 跳过 VideoWidget.resizeEvent（它会把 playBar 摆到画面底部并改其尺寸），
         # 只保留画面本身的自适应，所以直接调祖父类的实现
         QGraphicsView.resizeEvent(self, e)
         self.videoItem.setSize(QSizeF(self.size()))
+        self._pin_scene_rect()
         self.fitInView(self.videoItem, Qt.AspectRatioMode.KeepAspectRatio)
 
     def enterEvent(self, e) -> None:
@@ -297,7 +322,8 @@ class CollectionVideoPlayer(QWidget):
         self.hintLabel.hide()
 
     def _place_overlay(self) -> None:
-        # 以画面区（不含下方控制条）为基准居中
+        # 以画面区（不含下方控制条）为基准居中。覆盖层不进布局，所以一律用
+        # setGeometry 摆位——写 setFixedWidth/Height 等于给它加尺寸约束，没必要
         rect = self.view.geometry()
         cx, cy = rect.center().x(), rect.center().y()
         spinning = not self.spinner.isHidden()
@@ -305,11 +331,11 @@ class CollectionVideoPlayer(QWidget):
             self.spinner.move(cx - _SPINNER_SIZE // 2, cy - _SPINNER_SIZE - 4)
             self.spinner.raise_()
         w = max(120, rect.width() - 32)
-        self.hintLabel.setFixedWidth(w)
         # 换行 Label 的高度必须问 heightForWidth，sizeHint 不反映实际折行
         h = max(24, self.hintLabel.heightForWidth(w))
-        self.hintLabel.setFixedHeight(h)
-        self.hintLabel.move(cx - w // 2, cy + (4 if spinning else -h // 2))
+        self.hintLabel.setGeometry(
+            cx - w // 2, cy + (4 if spinning else -h // 2), w, h
+        )
         self.hintLabel.raise_()
 
     def resizeEvent(self, event) -> None:

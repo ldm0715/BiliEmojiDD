@@ -38,6 +38,7 @@ from qfluentwidgets import (
     setTheme,
 )
 
+from app.common.proxy import PROXY_SCHEMES
 from app.view.setting_page import SettingPage
 
 setTheme(Theme.LIGHT)
@@ -108,10 +109,13 @@ check(
     f"「打开下载文件夹」文案未变（实际 {page.openDirBtn.text()!r}）",
 )
 check(
-    page.protoCombo.currentData() in ("http", "https"),
+    page.protoCombo.currentData() in PROXY_SCHEMES,
     f"protoCombo.currentData() 有值（实际 {page.protoCombo.currentData()!r}）",
 )
-check(page.protoCombo.count() == 2, f"代理协议两项（实际 {page.protoCombo.count()}）")
+check(
+    page.protoCombo.count() == len(PROXY_SCHEMES),
+    f"代理协议 {len(PROXY_SCHEMES)} 项（实际 {page.protoCombo.count()}）",
+)
 check(page.themeCombo.count() == 3, f"主题下拉三项（实际 {page.themeCombo.count()}）")
 check(page.portSpin.value() > 0, f"端口有默认值（实际 {page.portSpin.value()}）")
 check(1 <= page.threadSpin.value() <= 16, f"线程数在 1–16（实际 {page.threadSpin.value()}）")
@@ -137,7 +141,7 @@ group_x = groups[0].titleLabel.mapTo(page, groups[0].titleLabel.rect().topLeft()
 card_x = _cards_of(groups[0])[0].mapTo(page, page.rect().topLeft()).x()
 check(group_x == card_x, f"分组标题 / 卡片左对齐（{group_x} / {card_x}）")
 counts = [len(_cards_of(g)) for g in groups]
-check(counts == [3, 4, 2, 1], f"每组卡片数 3/4/2/1（实际 {counts}）")
+check(counts == [3, 5, 2, 1], f"每组卡片数 3/5/2/1（实际 {counts}）")
 
 print("== 3. 下载目录副标题跟随 dirEdit ==")
 page.dirEdit.setText("X:/tmp/biliemoji")

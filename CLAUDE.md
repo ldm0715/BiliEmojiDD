@@ -33,11 +33,17 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/check_download_improvements.py  
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_video_tab.py      # 收藏集视频页：Pivot/选择条/高亮/续播/黑背景
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_search_cache.py   # 搜索历史浮层/磁盘缓存/接口缓存/触发时机/设置页身份头
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_home_page.py      # 主页：功能卡路由/英雄卡状态/队列预览/展示图降级/响应式列数/滚到底
+QT_QPA_PLATFORM=offscreen uv run python scripts/check_proxy_hint.py     # 代理：ProxyError 因果翻译/认证段往返/无全局代理/入口都带 proxies
+QT_QPA_PLATFORM=offscreen uv run python scripts/check_shell.py          # 应用外壳：内置字体+getFont 补丁/消息挂内容区/切页无动画
 QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py     # 各页面亮/暗截图到 screenshots/（人工比对用）
 
 # 主页展示图（非运行时代码，只在需要更新素材时手工跑；需网络，全量表情包需 Cookie）
 uv run python scripts/fetch_showcase.py --dry-run   # 先看要抓什么
 uv run python scripts/fetch_showcase.py             # 抓好裁好写进 static/showcase/
+
+# 内置字体（非运行时代码；Qt 加载不了 woff2，需先转成 ttf 再入库）
+uv run python scripts/convert_font.py --dry-run     # 先看会生成什么
+uv run python scripts/convert_font.py               # woff2 -> ttf 写进 static/font/
 
 # 一次跑完 lint + 导入自检 + 全部断言脚本（改动后的标准收尾）
 uv run ruff check . && uv run python -c "import app.MainWindow" && \
@@ -70,6 +76,8 @@ Windows 终端默认 GBK，脚本里的中文断言文案会 `UnicodeEncodeError
 | `docs/collection_video.md` | 收藏集视频预览：内容分页 Pivot、内嵌播放器 + 缩略图选择条、**先下到临时目录再本地播放**（`QMediaPlayer` 不读应用内代理）、`VideoWidget` 必须配黑背景否则反色 |
 | `docs/search_and_cache.md` | 搜索历史浮层面板 + 磁盘缓存 + 应用标识：`PillPushButton` 不能覆写 `__init__`、hover 删除按钮的 leaveEvent 坑、mtime 当 LRU 时间戳、`api_cache` 无损重建、窗口图标与版本号 |
 | `docs/home_page.md` | 主页（欢迎页）：英雄卡 + 功能入口卡 + 快速上手 / 关于 / 最近搜索、`static/showcase` 静态素材与抓取脚本、**`ImageLabel` 每帧平滑缩放**、**`FlowLayout` sizeHint 只有一行高导致重叠**、定尺寸子项顶高最小宽度、`SmoothScroll.duration` 步数必须为整数 |
+| `docs/proxy_diagnostics.md` | 代理：**只走 `proxies=` 参数**（删掉 `ProxyEnvManager` 全局环境变量）、代理认证（用户名/密码）与 SOCKS、`cause_hint` 的 ProxyError 成因表（CONNECT 隧道 / 407 / 只讲 HTTP）、设置页「测试」按钮 |
+| `docs/app_shell.md` | 应用外壳：全局字体（**Qt 不认 woff2**、qfluentwidgets `getFont` 硬编码字体族需打补丁 + `sys.modules` 重绑）、消息提示统一挂 `stackedWidget`、**切页去掉上游 300ms 整页位移动画** |
 
 **新增功能时同步更新**：`docs/` 下新建一篇（结构参照 `download_queue.md`），并登记进 `docs/README.md` 导航表与根 `README.md` 文档列表。
 
@@ -77,23 +85,25 @@ Windows 终端默认 GBK，脚本里的中文断言文案会 `UnicodeEncodeError
 
 - **Python 3.11**（`.python-version`）。**不要升级到 3.12**：qfluentwidgets 来自 GitHub fork `ldm0715/PyQt-Fluent-Widgets@PySide6`（v1.5.1），其 `setup.py` 要求 `PySide6<=6.4.2`，而 6.4.2 无 py3.12 wheel。代码禁用 PEP 701（f-string 内嵌同引号）等 3.12 专属语法——嵌套 f-string 请用 `('#' + str(x))` 之类写法。
 - **不要**把 qfluentwidgets 换回官方 PyPI 版（`PySide6-Fluent-Widgets[full]`）。开源版（官方与 fork）都没有数字分页组件（`Pagination` 属 Pro 版），`app/components/page_bar.py` 的 `PageBar` 是自制组件。
-- 依赖声明在 `pyproject.toml`，`[tool.uv] package=false`（应用非库）。
+- 依赖声明在 `pyproject.toml`，`[tool.uv] package=false`（应用非库）。运行时依赖多一个 `PySocks`（socks 代理）；dev 组的 `fonttools` / `brotli` 只给 `scripts/convert_font.py` 用。
+- `main.py` 里 `QApplication` 建好后、`import app.MainWindow` **之前**必须调 `apply_app_font(app)`（见 `app/common/font.py` 的时机说明）。
 
 ## 架构
 
-- `main.py`：入口。**先建 `QApplication` 再导入 `MainWindow`**（保证控件/信号在主线程构造）；`setTheme(cfg.theme.value)` 应用主题；`app.setWindowIcon(app_icon())` 设任务栏图标；启动时 `proxy_env.remember()` + `apply(cfg.proxy.value)` 快照并应用代理环境变量。
-- `app/MainWindow.py`：`FluentWindow` **五页导航**（主页/表情包/收藏集/下载/设置，设置在 BOTTOM）。**主页放第一个 `addSubInterface`** —— 上游在 `stackedWidget.count()==1` 时自动 `setCurrentItem` + `setDefaultRouteKey`，它自然成为启动页，不需要额外 `switchTo`。主页只发信号（`navigateRequested` / `searchRequested`），窗口的 `_navigate` / `_search_from_home` 负责 `switchTo` 并调用目标页的公开入口（`EmojiPage.query_package_id` / `filter_packages`、`DressPage.search_keyword`），主页不反向引用窗口。窗口标题 `BiliEmojiDD` + `setWindowIcon`——**不用自定义标题栏**，`FluentTitleBar` 自带 `iconLabel`/`titleLabel` 且已连 `windowIconChanged`/`windowTitleChanged`。侧栏展开宽度 `setExpandWidth(150)`；主题切换按钮（`NavigationPushButton`，插在设置之前，展开时显示「主题」文字）随主题换图标（亮色=`CONSTRACT`、暗色=`BRIGHTNESS`），点击切换 `LIGHT/DARK` 并持久化 + `signal_bus.configChanged` 让设置页下拉同步。**接线只走 `addWidget(onClick=...)`，不要再手动 connect `clicked`**（会双触发）。`closeEvent` 里：有运行中下载时弹确认（下载不支持安全中断，退出会残留 `.part`）；`task_manager.clear_pending()` 只清未开始任务。
+- `main.py`：入口。**先建 `QApplication` 再导入 `MainWindow`**（保证控件/信号在主线程构造）；两者之间调 `apply_app_font(app)` 装内置字体并给 qfluentwidgets 打补丁；`setTheme(cfg.theme.value)` 应用主题；`app.setWindowIcon(app_icon())` 设任务栏图标。**不再动任何代理环境变量**（代理只经 `proxies=` 显式传）。
+- `app/MainWindow.py`：`FluentWindow` **五页导航**（主页/表情包/收藏集/下载/设置，设置在 BOTTOM）。**主页放第一个 `addSubInterface`** —— 上游在 `stackedWidget.count()==1` 时自动 `setCurrentItem` + `setDefaultRouteKey`，它自然成为启动页，不需要额外 `switchTo`。**切页无动画**：`_set_current_interface()` 跳过上游 300ms 的整页位移动画，并直接换掉 `stackedWidget` 实例上的 `setCurrentWidget`（覆盖侧栏点击 / `switchTo` / 标题栏返回三条路径，见坑点）。主页只发信号（`navigateRequested` / `searchRequested`），窗口的 `_navigate` / `_search_from_home` 负责 `switchTo` 并调用目标页的公开入口（`EmojiPage.query_package_id` / `filter_packages`、`DressPage.search_keyword`），主页不反向引用窗口。窗口标题 `BiliEmojiDD` + `setWindowIcon`——**不用自定义标题栏**，`FluentTitleBar` 自带 `iconLabel`/`titleLabel` 且已连 `windowIconChanged`/`windowTitleChanged`。侧栏展开宽度 `setExpandWidth(150)`；主题切换按钮（`NavigationPushButton`，插在设置之前，展开时显示「主题」文字）随主题换图标（亮色=`CONSTRACT`、暗色=`BRIGHTNESS`），点击切换 `LIGHT/DARK` 并持久化 + `signal_bus.configChanged` 让设置页下拉同步。**接线只走 `addWidget(onClick=...)`，不要再手动 connect `clicked`**（会双触发）。`closeEvent` 里：有运行中下载时弹确认（下载不支持安全中断，退出会残留 `.part`）；`task_manager.clear_pending()` 只清未开始任务。
 - `app/common/`：
   - `config.py`：`AppConfig(QConfig)` 单例 `cfg`，**持久化到 `%APPDATA%/biliEmojiDD/config.json`**（不写项目目录）。项：`cookie`、`download_dir`、`default_gif`、`max_workers`(1–16)、`proxy`、`cache_limit_mb`(64–8192 MB)、`theme`。`theme` 项必须带 `EnumSerializer(Theme)`（否则 JSON 序列化崩）。`qconfig.load` 后会同步 `qconfig.themeMode` 到 `cfg.theme.value`（否则配置文件里残留的 `QFluentWidgets.ThemeMode` 会覆盖应用主题导致反色）。另有 `APP_NAME` / `APP_VERSION`（与 `pyproject.toml` 手工对齐，`package=false` 拿不到 `importlib.metadata`）/ `APP_CONFIG_DIR`。
-  - `resource.py`：`STATIC_DIR` / `APP_ICON_PATH` / `app_icon()`——项目根 `static/logo.ico`，文件缺失返回空 `QIcon` 不抛。另有主页素材入口 `SHOWCASE_DIR` / `showcase_images(kind, limit)` / `showcase_names(kind)`（读 `static/showcase/manifest.json` 定序，清单缺失退回文件名排序，**目录不存在返回 `[]`**，主页据此隐藏缩略图带）与两个依赖徽标 `QFLUENT_LOGO_PATH` / `PYSIDE_LOGO_PATH`。
+  - `resource.py`：`STATIC_DIR` / `APP_ICON_PATH` / `app_icon()`——项目根 `static/logo.ico`，文件缺失返回空 `QIcon` 不抛。另有主页素材入口 `SHOWCASE_DIR` / `showcase_images(kind, limit)` / `showcase_names(kind)`（读 `static/showcase/manifest.json` 定序，清单缺失退回文件名排序，**目录不存在返回 `[]`**，主页据此隐藏缩略图带）、内置字体入口 `FONT_DIR` / `app_font_files()`（扫 `static/font/` 下的 `.ttf`/`.otf`/`.ttc`）与两个依赖徽标 `QFLUENT_LOGO_PATH` / `PYSIDE_LOGO_PATH`。
+  - `font.py`：全局字体（详见 `docs/app_shell.md`）。`apply_app_font(app)` = `QFontDatabase.addApplicationFont` 装 `static/font/` 下所有字体 + `app.setFont` + **给 qfluentwidgets 打补丁**。**Qt 不认 woff2**（只认 TTF/TTC/OTF），woff2 要先用 `scripts/convert_font.py` 转成 ttf。补丁两步：换掉 `qfluentwidgets.common.font.getFont`，再扫 `sys.modules` 把 21 个模块导入时绑死的 `getFont` 重绑（`setFont` 不用重绑，它在自己模块 globals 里查 `getFont`）。**必须在 `import app.MainWindow` 之前调**。无字体静默返回 `None`。
   - `signal_bus.py`：全局信号（缩略图、配置变更）。
-  - `exception.py`：`show_bili_error(e, parent)` 统一 `BiliError` 子类 → 中文提示（`AuthRequired`→引导设置页、`DressNotFound`→"没有结果" 等）。提示走 `app/common/notify.py` 的 helper，不直接用 `InfoBar`。
-  - `proxy.py`：`parse_proxy/split_proxy/build_proxy/proxy_scheme` + `ProxyEnvManager`（`remember` 快照 / `apply` 设置或清空恢复原值）。
-  - `notify.py`：`notify_success/warning/error/info` —— **垂直布局 InfoBar**（标题一行/内容换行/按钮一行），全应用统一入口。
+  - `exception.py`：`show_bili_error(e, parent)` 统一 `BiliError` 子类 → 中文提示（`AuthRequired`→引导设置页、`DressNotFound`→"没有结果" 等）。提示走 `app/common/notify.py` 的 helper，不直接用 `InfoBar`。另有 `cause_hint(exc)`：沿 `__cause__`/`__context__` 挖出真正的 requests 异常翻成可行动中文（CONNECT 隧道被拒 / 407 认证 / 代理只讲 HTTP / 缺 PySocks / 超时），网络类提示会附上 `redact_proxy(cfg.proxy.value)`。
+  - `proxy.py`：`parse_proxy/split_proxy/split_proxy_auth/build_proxy/proxy_scheme/redact_proxy` + `PROXY_SCHEMES`(http/https/socks5/socks5h) + `pysocks_available()`。**没有全局代理**——不写任何 `HTTP_PROXY` 环境变量，代理只以 `proxies=` 显式传给每个联网入口（见 `docs/proxy_diagnostics.md`）。认证段按**最后一个 `@`** 切、用户名密码百分号转义。
+  - `notify.py`：`notify_success/warning/error/info` —— **垂直布局 InfoBar**（标题一行/内容换行/按钮一行），全应用统一入口。`_resolve_parent()` 把传入的页面 widget 归一成 `window.stackedWidget`（内容区），**调用点照传自己的页面即可**；这样位置固定在内容区右上角、且切页后消息不会跟着被藏掉。
   - `theme.py`：主题感知取色对 `BODY_TEXT`/`SECONDARY_TEXT`/`ORANGE_TEXT`（(light, dark) 二元组，配主题化 Label 的 `setTextColor`）；`bind_theme(widget, fn)` 立即执行 + 每次 `themeChangedFinished` 重执行（fn 须为 widget 绑定方法，销毁自动断开）；**全局调色板**在主题切换时按生效主题 `app.setPalette(...)` 并强制 `update()` 全部控件（纯 QWidget 背景/文字依赖 palette）。`isDarkTheme()` 返回生效主题（AUTO 已被 `qconfig` 解析成具体值）。
 - `app/components/`：
   - `task.py`：**线程层核心**。`Task`(QRunnable) + `TaskManager`（持有引用，finished 自动释放）+ `run_task()`。信号对象在主线程构造（亲和主线程），worker 线程 emit 自动 QueuedConnection。`autoDelete(False)` 防 C++ 对象提前释放丢信号。全局线程池 max 4。
-  - `thumb.py`：异步缩略图。worker 向**常驻 `signal_bus`** 发原始信号（`thumbRawLoaded`/`thumbRawFailed`），主线程转 `QPixmap` 写 `QPixmapCache` 再广播 `thumbLoaded`。**取字节前先查 `image_cache` 磁盘缓存**，未命中才联网并回写。emit 用 try/except 守卫（应用关闭时忽略）。构造里把 `QPixmapCache` 上限从默认 10 MB 提到 64 MB（单位 KB）。
+  - `thumb.py`：异步缩略图。worker 向**常驻 `signal_bus`** 发原始信号（`thumbRawLoaded`/`thumbRawFailed`），主线程转 `QPixmap` 写 `QPixmapCache` 再广播 `thumbLoaded`。**取字节前先查 `image_cache` 磁盘缓存**，未命中才联网并回写。cookie 与 **proxies 都在主线程 `request()` 里读一次再交给 worker**（worker 不碰 `cfg`）。emit 用 try/except 守卫（应用关闭时忽略）。构造里把 `QPixmapCache` 上限从默认 10 MB 提到 64 MB（单位 KB）。
   - `disk_cache.py`：通用磁盘缓存（`%APPDATA%/biliEmojiDD/cache/<name>/`）。**文件 `mtime` 兼作 LRU 时间戳**（读命中 `os.utime` 刷新），不写索引文件；写 `.part` 再 `os.replace`；超限按 mtime 升序删到上限 90%；上限每次 `put` 现读 `cfg.cache_limit_mb`。两个实例：`image_cache`（无 TTL，纯 LRU）、`api_store`（`touch_on_read=False`，TTL 由调用方给——**读会刷 mtime 的实例不能用 TTL**，否则永不过期）。`total_size()` / `clear_all()` 供设置页。
   - `api_cache.py`：带 TTL 磁盘缓存的取数入口 `search_dress` / `emoji_package` / `dress_collection`。存 `raw` dict、读回来 `from_dict` 无损重建；**只缓存成功结果**（`AuthRequired`/`DressNotFound` 照常抛）；key 不掺 cookie 指纹（这三个接口与账号无关）。**只在 worker 线程调用**。页面与 `content_meta` 一律走它，别再直接 new `Emoji`/`Dress`（`all_packages` 例外，它有自己的 `cache.py`）。
   - `search_history.py`：搜索历史。`SearchHistory`（`%APPDATA%/biliEmojiDD/search_history.json`，按 namespace 分表、MRU、最多 10 条）+ `SearchHistoryPanel`（**浮层下拉面板**：parent 是顶层窗口、不进任何布局、点搜索框展开、失焦/移出收起、动画动 `geometry`）+ `_HistoryChip`（`PillPushButton` + 悬停出现的 × ）。
@@ -101,6 +111,7 @@ Windows 终端默认 GBK，脚本里的中文断言文案会 `UnicodeEncodeError
   - `video_cache.py`：收藏集视频的**会话级本地缓存**。结构同 `content_meta.py`：独立 `QThreadPool(2)`、worker 用 `Downloader.download()` 下到 `tempfile.mkdtemp()` 目录后发 `signal_bus.videoRawReady(url, path|None)`、主线程写缓存后广播 `videoReady`。**不流式播远程 URL**（`QMediaPlayer` 走 WMF 自己的网络栈，读系统代理、不读应用内代理，也无法自定义 UA）。`remember(url, path)` 供详情页登记「已整包下载过」的本地 `.mp4`；`cleanup()` 在 `MainWindow.closeEvent` 里删临时目录；**`set_enabled(False)` 给屏幕外脚本关联网**。
   - `video_player.py`：`CollectionVideoPlayer` —— 组件库 `VideoWidget` + 缓冲/失败覆盖层。
     - **控制条从画面里挪到下方常显**：`_VideoView` 覆写 `resizeEvent`/`enterEvent`/`leaveEvent`，解绑上游的绝对定位与 hover 淡出；`_VideoView` 还把场景背景钉成纯黑（见坑点）。
+    - **画面区不参与尺寸协商**：`_VideoView` 覆写 `sizeHint`/`minimumSizeHint` 返回小常量 + `resizeEvent` 里 `setSceneRect` 钉住场景矩形。两者都不能去掉，否则 `growingItemsBoundingRect` 只涨不落会把整页 sizeHint 顶起来（见坑点）。
     - 控制条上游的「后退10s/前进30s」改成**上一个/下一个视频**（先 `clicked.disconnect()` 再接自己的槽，首尾禁用、越界直接 return），右侧补**全屏**按钮。
     - 播放/暂停图标接 `player.playbackStateChanged`（上游只在 `mediaStatusChanged` 时刷，自动暂停后图标不复位）。
     - **内嵌宽度完全交给布局 stretch，不在 `resizeEvent` 里写宽度约束**（见坑点）。
@@ -116,13 +127,13 @@ Windows 终端默认 GBK，脚本里的中文断言文案会 `UnicodeEncodeError
     - `QueueCard`+`QueueList`（下载队列，**宽屏两列窄屏单列**，封面随单元格自适应）
     - 通用约定：`PackageCard`/`DressCard` **右上角**挂 `InfoBadge.success('已下载')`、**勾选框移到左上角**（两者同时显示不打架）；`DressCard` 名称 `setWordWrap` 两行 + 整卡 `ToolTipFilter` 兜底完整名。**所有卡片文字用主题化 `CaptionLabel`/`StrongBodyLabel`/`BodyLabel` + `setTextColor(light, dark)`，自动随主题切换**；选中背景用**类选择器**（如 `QueueCard { background-color: ... }`）限定自身，不级联子 label。
   - `page_scaffold.py`：**四页共用版式底座**——`PAGE_MARGIN=36` / `page_title` / `title_row`（缩进走布局边距）/ `CommandCard`（`SimpleCardWidget` + `add_row` / `add_row_widget` / `add_widget`）/ `SectionCard`（`HeaderCardWidget`，内容区边距收紧，`add_header_widget()` 把 Pivot 挂到卡头右侧并把卡头高度恢复成 48）。卡片基类自带主题重绘，别自己写 QSS。
-  - `package_detail.py`（包详情视图，两个入口复用；头部卡 + `SectionCard("表情预览")`，`add_leading_widget()` 供「返回列表」嵌入）、`page_bar.py`（自制数字分页）、`image_viewer.py`（遮罩图片查看器，见下节）、`download_runner.py`（`start_download` + `download_package_batch`/`download_collection_batch`/`download_mixed_batch`）、`download_queue.py`（下载队列单例）、`dress_helpers.py`（收藏集类别判别 + dlc id 读取）、`cache.py`（全部表情包缓存）。
+  - `package_detail.py`（包详情视图，两个入口复用；头部卡 + `SectionCard("表情预览")`，`add_leading_widget()` 供「返回列表」嵌入）、`page_bar.py`（自制数字分页）、`image_viewer.py`（遮罩图片查看器，见下节）、`download_runner.py`（`start_download` + `download_package_batch`/`download_collection_batch`/`download_mixed_batch`）、`download_queue.py`（下载队列单例）、`dress_helpers.py`（收藏集类别判别 + dlc id 读取）、`cache.py`（全部表情包缓存）、`proxy_probe.py`（代理连通性自检，设置页「测试」按钮用，只在 worker 线程调用）。
 - `app/view/`：**五页统一 Fluent 卡片版式**（大标题 → 命令卡 → 内容，页边距 36，见 `docs/page_card_layout.md`）。
   - `home_page.py`：**启动默认页**（详见 `docs/home_page.md`）。`title_row` + `ScrollArea`（必须显式透明）内依次是 `_HeroCard`（logo/名称/版本/简介 + 状态行 + 主按钮，按 `cfg.cookie` 空否切「填写 Cookie」→设置页 / 「开始使用」→表情包页）、三张 `_FeatureCard`（`CardWidget`，整卡可点，`clicked` 无参；表情包 / 收藏集卡挂 `_ShowcaseStrip` 本地素材，下载卡挂 `_QueuePreviewStrip` 实时显示队列前 4 项封面 + `+N`）、`_QuickStartCard` / `_AboutCard`（`SectionCard`，宽窗两列）、`_RecentSearchCard`（读三个 namespace 的 `SearchHistory` 做胶囊，无记录整卡隐藏）。列数在 `resizeEvent → _reflow()` 里算，**列数没变直接 return**。
   - `emoji_page.py`：Pivot 双标签 + 命令卡；多选行按需显隐；详情「返回列表」在头部卡内。两个输入框都挂 `SearchHistoryPanel`（`emoji_id` / `emoji_filter`）；**过滤只在回车 / 点放大镜时触发**（不再是 `textChanged`，每敲一字重排整页太吵），点 × 走 `clearSignal` 恢复全部。另有供主页跳转的公开入口 `query_package_id(text)` / `filter_packages(kw)`（切 Pivot + 切页两句都要写；后者**只有已拉过全量时才真的过滤**，否则只回填关键词，不擅自发起需要 Cookie 的请求）。
   - `dress_page.py`：搜索命令卡（`kwEdit` 挂 `SearchHistoryPanel("dress")`）；详情头部卡 + `SectionCard("内容预览")`，**内容区是 `Pivot`（静态图片 / 动态视频）+ `QStackedWidget`**——图片页 `DressDetailGrid`、视频页**左 `CollectionVideoPlayer` + 右 `VideoStrip`**（宽度按 1:2 静态 stretch 分配，不做 resize 驱动的自适应）；无视频时视频 tab 禁用并强制回图片页；「仅看收藏集」**默认勾选** + `_last_summaries` 存原始结果、`toggled` 实时重过滤；详情 `_detail_summary` / `_detail_videos` 显式字段。另有供主页跳转的公开入口 `search_keyword(kw)`（先 `_go_back()` 回搜索页再搜）。
   - `download_page.py`：命令卡含计数/批量按钮/状态/进度条 + 队列列表。
-  - `setting_page.py`：**Fluent 设置卡片版式**——顶部身份行（`IconWidget` logo + `TitleLabel("BiliEmojiDD")` + `CaptionLabel("v0.1.0")`）+ `ScrollArea`/`ExpandLayout` + 四个 `SettingCardGroup`（账号 / 下载 / 缓存 / 外观）；Cookie / 下载目录用 `ExpandGroupSettingCard`，其余用本地 `_WidgetSettingCard`（`SettingCard` 尾部挂控件）；缓存组的上限 `SpinBox` 即时 `qconfig.set`，占用统计与清除都走 `run_task`（目录可能上万文件）；主题下拉带图标：`_sync_theme_icon` + `bind_theme`，外部切换后 `configChanged` 同步。
+  - `setting_page.py`：**Fluent 设置卡片版式**——顶部身份行（`IconWidget` logo + `TitleLabel("BiliEmojiDD")` + `CaptionLabel("v0.1.0")`）+ `ScrollArea`/`ExpandLayout` + 四个 `SettingCardGroup`（账号 / 下载 / 缓存 / 外观）；Cookie / 下载目录用 `ExpandGroupSettingCard`，其余用本地 `_WidgetSettingCard`（`SettingCard` 尾部挂控件）；代理行是「协议下拉（http/https/socks5/socks5h）+ 主机 + 端口 + **测试**」，下面另有「代理认证」行（用户名 + `PasswordLineEdit` 密码）——**`_current_proxy()` 是唯一的取值/校验入口**（保存与测试共用，拦协议前缀、空格、缺 PySocks 的 socks）；缓存组的上限 `SpinBox` 即时 `qconfig.set`，占用统计与清除都走 `run_task`（目录可能上万文件）；主题下拉带图标：`_sync_theme_icon` + `bind_theme`，外部切换后 `configChanged` 同步。
 
 ## 图片查看器（`app/components/image_viewer.py`）
 
@@ -163,6 +174,7 @@ Windows 终端默认 GBK，脚本里的中文断言文案会 `UnicodeEncodeError
 - **不换行的 `QLabel` 会把整页最小宽度顶起来**：`minimumSizeHint` 就是整串文字宽度，详情页长名一度让页面缩不到最小窗口（598px）。标题/元信息/提示类 Label 一律 `setWordWrap(True)`。
 - **隐藏的子页不会重新布局**：`QStackedWidget` 非当前页、未 `show()` 的 Tab，几何停留在上次可见时的尺寸——写几何断言前先切到该页，否则量到过期数字「假通过」。
 - **别在 `resizeEvent` 里写几何约束（`setMaximumWidth`/`setFixedSize`）来做「按内容比例自适应」**：离屏 `resize()` 一次就收敛、断言全过，但**交互式拖拽窗口时每帧会跑好几轮**「改约束 → 重新布局 → 又一次 resize」，叠上 `fitInView`、网格 `setGridSize` 重排就会画面畸形 + 明显卡顿（视频播放器踩过）。改用**静态 stretch 分配**，`resizeEvent` 里只做「可见时才更新」的轻量事。
+- **`QGraphicsView` 的 `sizeHint()` 跟着单调增长的场景矩形走**：`QGraphicsScene` 没显式设过 sceneRect 时返回 `growingItemsBoundingRect`（**只涨不落**），而 `QGraphicsView.sizeHint()` = `transform.mapRect(sceneRect())`。上游 `VideoWidget.resizeEvent` 里 `videoItem.setSize(self.size())` 会把窗口放大时的尺寸永久写进去。它还**延迟发作**：改场景矩形时不调 `updateGeometry()`，等到真的加载视频（几何失效）那一刻虚高的 sizeHint 才一次性灌进上层布局，把整页顶高且缩不回来（实测收藏集详情页 sizeHint 663x707 → 853x967）。修法：`resizeEvent` 里 `setSceneRect` 钉住 + 覆写 `sizeHint`/`minimumSizeHint` 返回小常量。回归断言见 `scripts/check_video_tab.py` 第 8 节。
 
 ### 卡片网格（`_CardGridBase` 家族）
 
@@ -191,6 +203,9 @@ Windows 终端默认 GBK，脚本里的中文断言文案会 `UnicodeEncodeError
 - **改上游组件按钮的行为前先 `clicked.disconnect()`**：`StandardMediaPlayBar.__initWidgets` 已把两个 skip 按钮连到 `skipBack(10000)`/`skipForward(30000)`，直接再 connect 会一次点击跑两件事。
 - **不要覆写组件库按钮的 `__init__`**：`PushButton.__init__` 是库自实现的 `singledispatchmethod`，`(text, parent)` 那个重载内部会**再调一次 `self.__init__(parent=parent)`**；子类若把 `text` 声明成必填位置参数，这次内部调用直接 `TypeError: missing 1 required positional argument`（`_HistoryChip` 崩过）。子类初始化一律走库留的 **`_postInit()`** 钩子——注意它在 `setText` 之前执行，依赖文本的东西（tooltip 等）只能建完对象再设。
 - **组件库播放条的播放/暂停图标只在 `mediaStatusChanged` 时刷**：任何不经过按钮的暂停（`hideEvent` 的自动 pause：切 tab、换父控件、切导航页）之后图标都不复位。接 `player.playbackStateChanged` 自己同步。
+- **切页动画会把整页重绘十几帧**：`PopUpAniStackedWidget.setCurrentIndex` 每次切页跑 300ms 的整页 `pos` 动画（`deltaY=76`），主页/设置页单帧重绘就 11–12ms，肉眼卡。`MainWindow._set_current_interface` 跳过动画直接 `QStackedWidget.setCurrentIndex`，并**换掉 `stackedWidget` 实例上的 `setCurrentWidget` 方法**——切页有三个入口（侧栏点击 / `switchTo` / 标题栏返回按钮的 `qrouter.pop()`），只覆写 `switchTo` 盖不全。
+- **`getFont()` 硬编码字体族**：`qfluentwidgets/common/font.py::getFont` 写死 `['Segoe UI', 'Microsoft YaHei', 'PingFang SC']`，组件库每个控件构造时都 `setFont(getFont(...))`，所以 `QApplication.setFont` 对它们无效。换字体必须打补丁，而且要扫 `sys.modules` 重绑——库里 21 个模块 `from ...common.font import getFont` 在导入时就绑死了函数对象（`setFont` 不用重绑，它在自己模块 globals 里查）。见 `app/common/font.py`。
+- **`InfoBarManager` 按 `infoBar.parent()` 的矩形算位置**：挂在子页上就会浮在页面中间，而且**切页后消息跟着被 `QStackedWidget` 藏掉**。统一挂 `window.stackedWidget`（`notify.py` 的 `_resolve_parent` 已归一），并 `raise_()`。
 
 ### 屏幕外断言脚本
 
@@ -217,7 +232,7 @@ Windows 终端默认 GBK，脚本里的中文断言文案会 `UnicodeEncodeError
   - 选中背景通过 `toggled` 同步整卡样式表背景，**必须 `setAttribute(WA_StyledBackground)`**（普通 QWidget 默认不绘制 stylesheet 背景），且样式表必须用**类选择器**（`"QueueCard { background-color: ... }"`）限定自身——无选择器的通用规则会级联到子 label 造成文字区整块上色。
   - `DressCard` 是纯 QWidget（**不用 `CardWidget`**：其基类 `mouseReleaseEvent` 只发 0 参数 `clicked`，与 `Signal(object)` 冲突 → 点击死）。
   - 多选/懒加载逻辑统一在 `_CardGridBase`，卡片只需暴露 `.item` / `set_selectable` / `set_checked` / `is_checked` / `set_pixmap` / `set_cell` / `clicked` / `toggled`（`EmojiCard` 为表情展示，多选相关给占位实现）。
-- **代理**：所有 `Emoji/Dress/Downloader` 显式传 `proxies=`（requests 显式值优先于环境变量）。biliemoji 的 typed 下载方法不转发 proxies 给内部 Downloader → 用环境变量 `HTTP(S)_PROXY` 兜底。**Windows 上 `os.environ` 大小写不敏感**：`ProxyEnvManager` 只管理大写键（POSIX 才双写），清空设置时恢复快照原值而非删除。
+- **代理**：所有 `Emoji/Dress/Downloader/BiliClient` **显式传 `proxies=`**，应用**不写任何 `HTTP(S)_PROXY` 环境变量**（`ProxyEnvManager` 已删除）——requests 的 `merge_environment_settings` 会把环境变量塞进请求级 proxies，反过来覆盖 `session.proxies`，而且是进程级副作用。联网入口七处：`api_cache`（三个）、`download_runner`（`Emoji`/`Dress` + `Downloader`）、`thumb`、`video_cache`、`proxy_probe`、设置页 Cookie 验证、`emoji_page` 全部表情包。**新增联网代码必须带上 `proxies=parse_proxy(cfg.proxy.value)`**，`scripts/check_proxy_hint.py` 会打桩 `BiliClient.__init__` 检查。要认证的代理把用户名密码拼进地址（`build_proxy` 负责百分号转义）。详见 `docs/proxy_diagnostics.md`。
 - **消息提示**：用 `app/common/notify.py` 的 `notify_*`，**不要直接调 `InfoBar.*`**。InfoBar 内容**不要开 `wordWrap`**（会让 QLabel 最小宽度塌缩、内容压成极窄一列），垂直布局 + `TextWrap` 预换行即可。
 
 ## biliemoji 2.0.0 要点

@@ -20,6 +20,8 @@ B 站表情包 / 收藏集（装扮）下载器 GUI：PySide6 + QFluentWidgets �
 | [collection_video.md](collection_video.md) | **收藏集视频预览**：内容分页 Pivot、内嵌播放器 + 缩略图选择条、先下到临时目录再本地播放、`VideoWidget` 黑背景坑 |
 | [search_and_cache.md](search_and_cache.md) | **搜索历史 + 磁盘缓存 + 应用标识**：浮层历史面板、图片/接口落盘缓存与容量设置、窗口图标与设置页身份头 |
 | [home_page.md](home_page.md) | **主页（欢迎页）**：英雄卡 + 功能入口卡 + 快速上手 / 关于 / 最近搜索、`static/showcase` 静态素材、`ImageLabel` 每帧缩放与 `FlowLayout` 高度坑 |
+| [proxy_diagnostics.md](proxy_diagnostics.md) | **代理**：只走 `proxies=` 参数（删掉全局环境变量）、认证与 SOCKS、ProxyError 成因表与「测试」按钮 |
+| [app_shell.md](app_shell.md) | **应用外壳**：全局字体（woff2 不可用 + qfluentwidgets `getFont` 补丁）、消息提示统一挂内容区、切页去掉 300ms 位移动画 |
 
 ## 快速上手
 

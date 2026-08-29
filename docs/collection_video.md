@@ -231,7 +231,40 @@ Theme.DARK  | backgroundBrush style = NoBrush | qss = QGraphicsView { background
 **视频每项只取 `video_list[0]`**——与 `download_collection_batch` 建下载任务、
 `content_meta.collection_meta` 计数的口径严格一致，页面上显示的视频数就是会落盘的文件数。
 
-## 八、验证
+## 八、播放器不参与尺寸协商（否则把窗口顶高）
+
+`_VideoView` 覆写了 `sizeHint()` / `minimumSizeHint()` 返回小常量，并在
+`resizeEvent` 里显式 `graphicsScene.setSceneRect(0, 0, view.width, view.height)`。
+**这两件事都不能去掉**，原因：
+
+`QGraphicsScene` 没显式设过 sceneRect 时，`sceneRect()` 返回的是
+`growingItemsBoundingRect` —— **只涨不落**。而 `QGraphicsView.sizeHint()` 正是
+`transform.mapRect(sceneRect())`。上游 `VideoWidget.resizeEvent` 里
+`videoItem.setSize(self.size())` 会把「窗口放大时的画面尺寸」永久写进那个矩形。
+
+麻烦在于它**延迟发作**：`QGraphicsView` 改场景矩形时不调 `updateGeometry()`，
+所以窗口拉大的当下父布局还用着旧的缓存值；等到播放器真的加载视频、几何被
+invalidate 的那一刻，虚高的 sizeHint 一次性灌进
+`videoPane → contentStack → previewCard → detailPage`。实测（离屏 900x700 页面，
+拉到 1600x1000 再拉回来，然后 `updateGeometry()`）：
+
+| | 拉大前 | 拉回来 + updateGeometry |
+|---|---|---|
+| `view.sizeHint` | 260x328 | 489x600 |
+| `DressPage.sizeHint` | 663x707 | **853x967** |
+
+页面只有 900x700，却声称想要 853x967，于是预览卡把头部卡压到最小、整页版式被顶起来，
+且**缩窗口回不去**（矩形只涨不落）。
+
+修法是双保险：钉住 sceneRect 让它跟着视口走；同时让画面区干脆不报尺寸——
+画面大小完全由外层布局的 stretch 决定，`QGraphicsView` 本来就不该参与协商。
+
+回归断言在 `scripts/check_video_tab.py` 第 8 节：记下 view / player / page 的
+`sizeHint` 与 `minimumSizeHint` → 放大到 1800x1050 → 缩回 → 手动 `updateGeometry()`
+（离屏没有真实视频，用它复现「几何失效」那一刻）→ 断言六个值全部回到原值、
+sceneRect 等于当前视口、页面仍能缩回 600 高。
+
+## 九、验证
 
 ```bash
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_video_tab.py      # 视频页

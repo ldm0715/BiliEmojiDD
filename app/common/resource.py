@@ -1,4 +1,4 @@
-"""静态资源定位：应用图标、主页展示图等。
+"""静态资源定位：应用图标、内置字体、主页展示图等。
 
 资源放在项目根的 `static/`（不是包内），所以路径按本文件位置回溯两级：
 `app/common/resource.py` → parents[0]=common、[1]=app、[2]=项目根。
@@ -20,6 +20,9 @@ PYSIDE_LOGO_PATH = STATIC_DIR / "qtforpython.png"
 SHOWCASE_DIR = STATIC_DIR / "showcase"
 SHOWCASE_MANIFEST = SHOWCASE_DIR / "manifest.json"
 SHOWCASE_KINDS = ("emoji", "collection")
+# 应用内置字体：只认 Qt 支持的三种容器格式（woff/woff2 加载必失败，见 scripts/convert_font.py）
+FONT_DIR = STATIC_DIR / "font"
+FONT_SUFFIXES = (".ttf", ".otf", ".ttc")
 
 
 def app_icon() -> QIcon:
@@ -27,6 +30,20 @@ def app_icon() -> QIcon:
     if not APP_ICON_PATH.is_file():
         return QIcon()
     return QIcon(str(APP_ICON_PATH))
+
+
+def app_font_files() -> list[Path]:
+    """内置字体文件列表（目录不存在 / 没有可用格式都返回 []）。
+
+    同族的多个字重（Regular / Bold …）全部登记即可，Qt 会按 `QFont.weight` 挑真字重；
+    往 `static/font/` 里丢新文件就自动生效，无需改代码。
+    """
+    if not FONT_DIR.is_dir():
+        return []
+    return sorted(
+        p for p in FONT_DIR.iterdir()
+        if p.is_file() and p.suffix.lower() in FONT_SUFFIXES
+    )
 
 
 def _manifest() -> dict:

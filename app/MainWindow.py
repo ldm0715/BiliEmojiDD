@@ -1,7 +1,9 @@
 """主窗口：FluentWindow 导航 + 侧栏主题切换 + 关闭窗口时的下载保护。"""
 from __future__ import annotations
 
+from PySide6.QtCore import QAbstractAnimation
 from PySide6.QtGui import QCloseEvent
+from PySide6.QtWidgets import QStackedWidget
 from qfluentwidgets import (
     FluentIcon,
     FluentWindow,
@@ -36,6 +38,9 @@ class MainWindow(FluentWindow):
     def __init__(self) -> None:
         super().__init__()
         self.navigationInterface.setExpandWidth(150)  # 侧栏展开宽度（默认 322）
+        # 标题栏返回按钮走 qrouter.pop() → stacked.setCurrentWidget，不经 switchTo，
+        # 所以直接换掉实例上的方法，三个切页入口统一无动画（见 _set_current_interface）
+        self.stackedWidget.setCurrentWidget = self._set_current_interface
         self.homePage = HomePage(self)
         self.emojiPage = EmojiPage(self)
         self.dressPage = DressPage(self)
@@ -44,6 +49,36 @@ class MainWindow(FluentWindow):
 
         self.initNavigation()
         self.initWindow()
+
+    # ---- 切页 ----
+
+    def _set_current_interface(self, interface, popOut: bool = True) -> None:
+        """无动画切页。
+
+        上游 `PopUpAniStackedWidget` 每次切页要跑 300ms 的整页 `pos` 动画
+        （deltaY=76），这 300ms 里整页被重绘十几帧——主页 / 设置页实测单帧
+        11–12ms，肉眼就是卡。页面内容本身就够重（滚动区 + 几十张卡片），
+        为一次导航付这个代价不值。
+
+        直接改 `stackedWidget` 实例上的这个方法（而不是只覆写 `switchTo`），
+        是为了把三个入口一次盖全：侧栏点击、`switchTo`、标题栏返回按钮
+        （`qrouter.pop()` 直接调 `stacked.setCurrentWidget`）。
+        `popOut` 参数只为签名兼容，这里一律忽略。
+        """
+        view = self.stackedWidget.view
+        index = view.indexOf(interface)
+        if index < 0 or index == view.currentIndex():
+            return
+        ani = view._ani
+        if ani is not None and ani.state() == QAbstractAnimation.State.Running:
+            ani.stop()
+        # 跳过 PopUpAniStackedWidget.setCurrentIndex，直接走 QStackedWidget 的实现
+        QStackedWidget.setCurrentIndex(view, index)
+        # 动画中途被打断时页可能停在 +76px 的偏移位置上，切完补回原位
+        interface.move(interface.x(), 0)
+
+    def switchTo(self, interface) -> None:
+        self._set_current_interface(interface)
 
     def initNavigation(self) -> None:
         # FluentWindow.addSubInterface 要求页面 objectName 非空
