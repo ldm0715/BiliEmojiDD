@@ -14,6 +14,7 @@ from qfluentwidgets import (
 )
 
 from app.common.config import cfg
+from app.common.resource import app_icon
 from app.common.signal_bus import signal_bus
 from app.common.theme import is_dark
 from app.components.task import task_manager
@@ -82,7 +83,10 @@ class MainWindow(FluentWindow):
         )
 
     def initWindow(self) -> None:
-        self.setWindowTitle("B 站表情包下载器")
+        # FluentTitleBar 自带 iconLabel + titleLabel，且已连好 windowIconChanged /
+        # windowTitleChanged——设这两项即可，无需自定义标题栏
+        self.setWindowIcon(app_icon())
+        self.setWindowTitle("BiliEmojiDD")
         self.resize(1100, 760)
         self.setMinimumSize(820, 600)
 

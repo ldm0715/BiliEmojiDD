@@ -13,12 +13,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from biliemoji import Dress, Emoji
 from PySide6.QtCore import QObject, QRunnable, QThreadPool
 
-from app.common.config import cfg
-from app.common.proxy import parse_proxy
 from app.common.signal_bus import signal_bus
+from app.components import api_cache
 from app.components.download_queue import item_key, item_kind
 from app.components.dress_helpers import dlc_ids, is_collection
 
@@ -51,31 +49,28 @@ def collection_meta(coll) -> ContentMeta:
 
 
 class _MetaTask(QRunnable):
-    """拉一个下载项的详情并算出内容数量，经 signal_bus 返回（失败发 None）。"""
+    """拉一个下载项的详情并算出内容数量，经 signal_bus 返回（失败发 None）。
 
-    def __init__(self, item, cookie: str, proxies) -> None:
+    详情走 `api_cache`：与两个详情页共用同一份磁盘缓存，进过详情的项零请求。
+    """
+
+    def __init__(self, item) -> None:
         super().__init__()
         self.setAutoDelete(False)
         self._item = item
         self._key = item_key(item)
-        self._cookie = cookie
-        self._proxies = proxies
 
     def run(self) -> None:
         meta = None
         try:
             if item_kind(self._item) == "package":
-                pkg = Emoji(
-                    cookie=self._cookie, proxies=self._proxies
-                ).certain_emoji_typed(self._item.id)
-                meta = _package_meta(pkg)
+                meta = _package_meta(api_cache.emoji_package(self._item.id))
             else:
                 act_id, lottery_id = dlc_ids(self._item)
                 if is_collection(self._item) and act_id and lottery_id:
-                    coll = Dress(
-                        cookie=self._cookie, proxies=self._proxies
-                    ).certain_lottery_typed(act_id, lottery_id)
-                    meta = collection_meta(coll)
+                    meta = collection_meta(
+                        api_cache.dress_collection(act_id, lottery_id)
+                    )
         except Exception:  # noqa: BLE001 取不到就显示「未知」，不打扰用户
             meta = None
         # 应用关闭时信号对象可能已销毁，忽略该阶段的 RuntimeError
@@ -132,9 +127,7 @@ class ContentMetaManager(QObject):
         if self.cached(item) is not None:  # 同步推导得出，无需联网
             return
         self._inflight.add(key)
-        self._pool.start(
-            _MetaTask(item, cfg.cookie.value, parse_proxy(cfg.proxy.value))
-        )
+        self._pool.start(_MetaTask(item))
 
     def _on_raw(self, key, meta) -> None:
         """worker 拉取完成：主线程写缓存后广播（连接顺序保证卡片读得到）。"""

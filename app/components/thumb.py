@@ -1,7 +1,10 @@
-"""异步缩略图加载：独立线程池 + 按 URL 去重 + QPixmapCache 主线程缓存。
+"""异步缩略图加载：独立线程池 + 按 URL 去重 + 内存/磁盘两级缓存。
 
 线程规则：worker 线程只下载字节并构造 QImage，绝不碰 QPixmap；
 QPixmap 转换与 QPixmapCache 读写全部在主线程（信号队列回来的槽内）完成。
+
+缓存分三层：内存 `QPixmapCache`（本会话，命中即同步返回）→ 磁盘 `image_cache`
+（跨会话，worker 线程读写）→ 网络。
 
 worker 直接向常驻的 signal_bus 发射原始信号（thumbRawLoaded/thumbRawFailed），
 避免任务对象持有的 QObject 在 worker 线程运行期间被释放。
@@ -14,10 +17,15 @@ from PySide6.QtGui import QImage, QPixmap, QPixmapCache
 
 from app.common.config import cfg
 from app.common.signal_bus import signal_bus
+from app.components.disk_cache import image_cache
+
+# Qt 默认只给 QPixmapCache 10 MB：翻几页卡片就被挤掉、回头再看又要重下。
+# 单位是 KB。
+_PIXMAP_CACHE_KB = 64 * 1024
 
 
 class ThumbLoadTask(QRunnable):
-    """下载一个图片并解码为 QImage，经 signal_bus 返回。"""
+    """取一个图片的字节（磁盘缓存优先）并解码为 QImage，经 signal_bus 返回。"""
 
     def __init__(self, url: str, cookie: str) -> None:
         super().__init__()
@@ -28,8 +36,11 @@ class ThumbLoadTask(QRunnable):
     def run(self) -> None:
         image = None
         try:
-            client = BiliClient(cookie=self._cookie)
-            data = client.get_bytes(self._url, timeout=15)
+            data = image_cache.get(self._url)
+            if data is None:
+                client = BiliClient(cookie=self._cookie)
+                data = client.get_bytes(self._url, timeout=15)
+                image_cache.put(self._url, data)
             img = QImage()
             if img.loadFromData(data):
                 image = img
@@ -50,6 +61,7 @@ class ThumbManager(QObject):
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
+        QPixmapCache.setCacheLimit(_PIXMAP_CACHE_KB)
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(3)
         self._inflight: set[str] = set()

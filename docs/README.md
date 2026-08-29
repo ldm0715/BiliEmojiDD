@@ -18,6 +18,7 @@ B 站表情包 / 收藏集（装扮）下载器 GUI：PySide6 + QFluentWidgets �
 | [page_card_layout.md](page_card_layout.md) | **三页卡片版式**：表情包 / 收藏集 / 下载页的大标题 + 命令卡 + 内容卡、`page_scaffold` 共用底座、踩坑 |
 | [download_page_improvements.md](download_page_improvements.md) | **下载体验优化**：GIF 选项按需显隐、队列内容数量懒加载、全部成功自动出队、缩略图加载环、收藏集去重键修复 |
 | [collection_video.md](collection_video.md) | **收藏集视频预览**：内容分页 Pivot、内嵌播放器 + 缩略图选择条、先下到临时目录再本地播放、`VideoWidget` 黑背景坑 |
+| [search_and_cache.md](search_and_cache.md) | **搜索历史 + 磁盘缓存 + 应用标识**：浮层历史面板、图片/接口落盘缓存与容量设置、窗口图标与设置页身份头 |
 
 ## 快速上手
 

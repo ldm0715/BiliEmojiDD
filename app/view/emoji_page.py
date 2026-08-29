@@ -32,6 +32,7 @@ from app.common.exception import show_bili_error
 from app.common.notify import notify_info, notify_success, notify_warning
 from app.common.proxy import parse_proxy
 from app.common.theme import SECONDARY_TEXT
+from app.components import api_cache
 from app.components.cache import load_all_packages_cache, save_all_packages_cache
 from app.components.download_queue import download_queue
 from app.components.package_detail import PackageDetailView
@@ -44,6 +45,7 @@ from app.components.page_scaffold import (
     page_title,
     title_row,
 )
+from app.components.search_history import SearchHistoryPanel
 from app.components.task import run_task
 from app.components.widgets import PackageGrid
 
@@ -69,6 +71,9 @@ class _IdQueryTab(QWidget):
         search_row.addWidget(self.idEdit)
         search_row.addWidget(self.queryBtn)
         search_row.addStretch(1)
+
+        # 查询记录：浮层面板，点搜索框才下拉，不占命令卡版面
+        self.historyPanel = SearchHistoryPanel(self.idEdit, "emoji_id")
         layout.addWidget(self.searchCard)
 
         self.detail = PackageDetailView(self)
@@ -76,6 +81,15 @@ class _IdQueryTab(QWidget):
 
         self.queryBtn.clicked.connect(self._on_query)
         self.idEdit.returnPressed.connect(self._on_query)
+        # 放大镜按钮走 searchSignal（SearchLineEdit 内部只把它连到自己的 search()），
+        # 不接的话点图标毫无反应
+        self.idEdit.searchSignal.connect(self._on_query)
+        self.historyPanel.activated.connect(self._on_history_activated)
+
+    def _on_history_activated(self, text: str) -> None:
+        """点历史胶囊 = 回填 ID 并立即查（命中缓存时几乎瞬时）。"""
+        self.idEdit.setText(text)
+        self._on_query()
 
     def _on_query(self) -> None:
         text = self.idEdit.text().strip()
@@ -90,11 +104,10 @@ class _IdQueryTab(QWidget):
         pid = int(text)
         self.queryBtn.setEnabled(False)
         self.detail.show_loading(text)
+        self.historyPanel.record(text)
 
         def task():
-            return Emoji(
-                cookie=cfg.cookie.value, proxies=parse_proxy(cfg.proxy.value)
-            ).certain_emoji_typed(pid)
+            return api_cache.emoji_package(pid)
 
         run_task(
             task,
@@ -129,13 +142,34 @@ class _AllPackagesTab(QWidget):
 
         self.fetchBtn.clicked.connect(self._on_fetch)
         self.refreshBtn.clicked.connect(self._on_refresh)
-        self.filterEdit.textChanged.connect(self._repopulate)
+        # 过滤只在回车 / 点放大镜时触发——每敲一个字就重排整页太吵，
+        # 与收藏集搜索的交互保持一致；点 × 清空则立刻恢复全部
+        self.filterEdit.returnPressed.connect(self._on_filter)
+        self.filterEdit.searchSignal.connect(self._on_filter)
+        self.filterEdit.clearSignal.connect(self._on_filter_cleared)
+        self.historyPanel.activated.connect(self._on_history_activated)
         self.backBtn.clicked.connect(
             lambda: self.stacked.setCurrentWidget(self.listPage)
         )
         self.multiBtn.toggled.connect(self._set_multi)
         self.addBtn.clicked.connect(self._add_to_queue)
         self.grid.selectionChanged.connect(self._update_select_label)
+
+    def _on_filter(self) -> None:
+        keyword = self.filterEdit.text().strip()
+        if keyword:
+            self.historyPanel.record(keyword)
+        self._repopulate(keyword)
+
+    def _on_filter_cleared(self) -> None:
+        self.filterEdit.clear()
+        self._repopulate("")
+
+    def _on_history_activated(self, keyword: str) -> None:
+        """点历史胶囊 = 回填关键词并立即过滤。"""
+        self.filterEdit.setText(keyword)
+        self._on_filter()
+
     def _build_list_page(self) -> None:
         layout = QVBoxLayout(self.listPage)
         layout.setContentsMargins(PAGE_MARGIN, 0, PAGE_MARGIN, PAGE_BOTTOM)
@@ -157,6 +191,9 @@ class _AllPackagesTab(QWidget):
         top_row.addWidget(self.multiBtn)
         top_row.addWidget(self.filterEdit, 1)
         top_row.addWidget(self.countLabel)
+
+        # 过滤记录：浮层面板，点过滤框才下拉，不占命令卡版面
+        self.historyPanel = SearchHistoryPanel(self.filterEdit, "emoji_filter")
 
         # 多选行：只在多选态显示，隐藏时命令卡自动收缩一行
         self.selectRow, select_row = self.commandCard.add_row_widget()
@@ -198,9 +235,7 @@ class _AllPackagesTab(QWidget):
         self.detail.show_loading(pkg.text or f"#{pkg.id}")
 
         def task():
-            return Emoji(
-                cookie=cfg.cookie.value, proxies=parse_proxy(cfg.proxy.value)
-            ).certain_emoji_typed(pkg.id)
+            return api_cache.emoji_package(pkg.id)
 
         run_task(
             task,

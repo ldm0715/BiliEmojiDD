@@ -17,6 +17,9 @@ from qfluentwidgets import (
 )
 
 APP_NAME = "biliEmojiDD"
+# 与 pyproject.toml 的 version 对齐手工维护：[tool.uv] package=false，
+# 应用不是安装包，importlib.metadata 取不到版本
+APP_VERSION = "0.1.0"
 APP_CONFIG_DIR = Path(os.getenv("APPDATA", str(Path.home()))) / APP_NAME
 
 
@@ -30,6 +33,8 @@ class AppConfig(QConfig):
     default_gif = ConfigItem("Download", "gif", True)
     max_workers = RangeConfigItem("Download", "maxWorkers", 8, RangeValidator(1, 16))
     proxy = ConfigItem("Download", "proxy", "")
+    # 磁盘缓存上限（MB）：图片字节 + 接口响应，超限按 LRU 淘汰
+    cache_limit_mb = RangeConfigItem("Cache", "limitMB", 512, RangeValidator(64, 8192))
     theme = OptionsConfigItem(
         "Appearance",
         "theme",

@@ -17,10 +17,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from qfluentwidgets import (
+    CaptionLabel,
     ComboBox,
     ExpandGroupSettingCard,
     ExpandLayout,
     FluentIcon,
+    IconWidget,
     InfoBarPosition,
     LineEdit,
     PasswordLineEdit,
@@ -38,18 +40,21 @@ from qfluentwidgets import (
     setTheme,
 )
 
-from app.common.config import APP_CONFIG_DIR, cfg
+from app.common.config import APP_CONFIG_DIR, APP_VERSION, cfg
 from app.common.exception import show_bili_error
 from app.common.notify import notify_success, notify_warning
 from app.common.proxy import build_proxy, parse_proxy, proxy_env, split_proxy
+from app.common.resource import app_icon
 from app.common.signal_bus import signal_bus
-from app.common.theme import bind_theme
+from app.common.theme import SECONDARY_TEXT, bind_theme
+from app.components.disk_cache import MB, clear_all, total_size
 from app.components.download_runner import open_in_explorer
 from app.components.task import run_task
 
 _THEMES = [Theme.AUTO, Theme.LIGHT, Theme.DARK]
 
 _PAGE_MARGIN = 36  # 分组左右留白（与大标题对齐）
+_LOGO_SIZE = 64  # 顶部应用图标边长
 _ROW_H = 60  # 展开区每行高度（addGroupWidget 靠固定高算展开高度）
 
 
@@ -109,14 +114,30 @@ class SettingPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        self.titleLabel = TitleLabel("设置", self)
-        # 缩进走布局边距，不用 setContentsMargins：Label 套了组件库 QSS，
+        # 顶部身份区：整体居中，第一行大图标，第二行「应用名 + 版本号」
+        self.titleLabel = TitleLabel("BiliEmojiDD", self)
+        self.logoIcon = IconWidget(app_icon(), self)
+        self.logoIcon.setFixedSize(_LOGO_SIZE, _LOGO_SIZE)
+        self.versionLabel = CaptionLabel(f"v{APP_VERSION}", self)
+        self.versionLabel.setTextColor(*SECONDARY_TEXT)
+        # 缩进/留白走布局边距，不用 setContentsMargins：Label 套了组件库 QSS，
         # QStyleSheetStyle 会用 QSS 盒模型重算 contentsMargins，手动设的被忽略
-        title_box = QHBoxLayout()
-        title_box.setContentsMargins(_PAGE_MARGIN, 20, _PAGE_MARGIN, 12)
-        title_box.addWidget(self.titleLabel)
-        title_box.addStretch(1)
-        root.addLayout(title_box)
+        header_box = QVBoxLayout()
+        header_box.setContentsMargins(_PAGE_MARGIN, 20, _PAGE_MARGIN, 16)
+        header_box.setSpacing(6)
+        header_box.addWidget(
+            self.logoIcon, 0, Qt.AlignmentFlag.AlignHCenter
+        )
+        name_row = QHBoxLayout()
+        name_row.setContentsMargins(0, 0, 0, 0)
+        name_row.setSpacing(8)
+        name_row.addStretch(1)
+        name_row.addWidget(self.titleLabel, 0, Qt.AlignmentFlag.AlignVCenter)
+        # 版本号贴着应用名底部排
+        name_row.addWidget(self.versionLabel, 0, Qt.AlignmentFlag.AlignBottom)
+        name_row.addStretch(1)
+        header_box.addLayout(name_row)
+        root.addLayout(header_box)
 
         self.scrollArea = ScrollArea(self)
         self.scrollWidget = QWidget()
@@ -140,6 +161,7 @@ class SettingPage(QWidget):
 
         self._build_account_group()
         self._build_download_group()
+        self._build_cache_group()
         self._build_theme_group()
 
     # ---- 账号 ----
@@ -360,6 +382,85 @@ class SettingPage(QWidget):
             parent=self,
             position=InfoBarPosition.TOP_RIGHT,
         )
+
+    # ---- 缓存 ----
+    def _build_cache_group(self) -> None:
+        group = SettingCardGroup("缓存", self.scrollWidget)
+
+        self.cacheSpin = SpinBox(group)
+        self.cacheSpin.setRange(64, 8192)
+        self.cacheSpin.setSingleStep(64)
+        self.cacheSpin.setValue(cfg.cache_limit_mb.value)
+        # SpinBox 右侧上下按钮占掉约 64px，四位数要给够宽度否则被裁
+        self.cacheSpin.setFixedWidth(140)
+        self.cacheLimitCard = _WidgetSettingCard(
+            FluentIcon.CLOUD,
+            "缓存上限",
+            "图片与接口响应最多占用的磁盘空间（64–8192 MB），修改后立即生效",
+            [self.cacheSpin],
+            group,
+        )
+
+        self.clearCacheBtn = PushButton("清除缓存", group)
+        self.cacheUsageCard = _WidgetSettingCard(
+            FluentIcon.BROOM,
+            "缓存占用",
+            "统计中…",
+            [self.clearCacheBtn],
+            group,
+        )
+
+        group.addSettingCards([self.cacheLimitCard, self.cacheUsageCard])
+        self.expandLayout.addWidget(group)
+        self.cacheGroup = group
+
+        self.cacheSpin.valueChanged.connect(self._on_cache_limit_changed)
+        self.clearCacheBtn.clicked.connect(self._on_clear_cache)
+        self._refresh_cache_usage()
+
+    def _on_cache_limit_changed(self, value: int) -> None:
+        # 即时保存（同主题下拉的风格）：下次 put 时现读该值，无需重启
+        qconfig.set(cfg.cache_limit_mb, value)
+        self._refresh_cache_usage()
+
+    def _refresh_cache_usage(self) -> None:
+        """扫目录算占用。文件可能上万，放后台线程，避免卡住主线程。"""
+        limit = cfg.cache_limit_mb.value
+
+        def on_ok(used: int) -> None:
+            self.cacheUsageCard.setContent(
+                f"已用 {used / MB:.1f} MB / 上限 {limit} MB"
+            )
+
+        run_task(
+            total_size,
+            on_success=on_ok,
+            on_error=lambda e: self.cacheUsageCard.setContent("缓存占用未知"),
+        )
+
+    def _on_clear_cache(self) -> None:
+        self.clearCacheBtn.setEnabled(False)
+        run_task(
+            clear_all,
+            on_success=self._on_cache_cleared,
+            on_finished=self._on_clear_cache_finished,
+        )
+
+    def _on_cache_cleared(self, _result) -> None:
+        notify_success(
+            "已清除",
+            "图片与接口响应缓存已清空",
+            parent=self,
+            position=InfoBarPosition.TOP_RIGHT,
+        )
+
+    def _on_clear_cache_finished(self, _ok: bool) -> None:
+        self.clearCacheBtn.setEnabled(True)
+        self._refresh_cache_usage()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._refresh_cache_usage()  # 每次进设置页刷新占用
 
     # ---- 主题 ----
     def _build_theme_group(self) -> None:

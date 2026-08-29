@@ -116,22 +116,28 @@ check(page.themeCombo.count() == 3, f"主题下拉三项（实际 {page.themeCom
 check(page.portSpin.value() > 0, f"端口有默认值（实际 {page.portSpin.value()}）")
 check(1 <= page.threadSpin.value() <= 16, f"线程数在 1–16（实际 {page.threadSpin.value()}）")
 
-print("== 2. 版式结构：三个分组 + 每组卡片数 ==")
+print("== 2. 版式结构：四个分组 + 每组卡片数 ==")
 groups = [w for w in page.scrollWidget.children() if isinstance(w, SettingCardGroup)]
-check(len(groups) == 3, f"三个 SettingCardGroup（实际 {len(groups)}）")
+check(len(groups) == 4, f"四个 SettingCardGroup（实际 {len(groups)}）")
 titles = [g.titleLabel.text() for g in groups]
-check(titles == ["账号", "下载", "外观"], f"分组标题依次为 账号/下载/外观（实际 {titles}）")
-check(page.titleLabel.text() == "设置", "页面大标题为「设置」")
-# 大标题 / 分组标题 / 卡片左边缘三者对齐（Label 有组件库 QSS，setContentsMargins 会被忽略）
-title_x = page.titleLabel.mapTo(page, page.titleLabel.rect().topLeft()).x()
+check(
+    titles == ["账号", "下载", "缓存", "外观"],
+    f"分组标题依次为 账号/下载/缓存/外观（实际 {titles}）",
+)
+# 顶部是居中的应用身份区（大图标 / 应用名 + 版本号），细节断言见 check_search_cache.py
+check(page.titleLabel.text() == "BiliEmojiDD", "页面大标题为应用名")
+# 身份区居中；分组标题与卡片左边缘仍对齐在 PAGE_MARGIN
+# （Label 有组件库 QSS，setContentsMargins 会被忽略，缩进只能走布局边距）
+logo_center = page.logoIcon.mapTo(page, page.logoIcon.rect().center()).x()
+check(
+    abs(logo_center - page.width() // 2) <= 2,
+    f"logo 水平居中（{logo_center} vs {page.width() // 2}）",
+)
 group_x = groups[0].titleLabel.mapTo(page, groups[0].titleLabel.rect().topLeft()).x()
 card_x = _cards_of(groups[0])[0].mapTo(page, page.rect().topLeft()).x()
-check(
-    title_x == group_x == card_x,
-    f"大标题 / 分组标题 / 卡片左对齐（{title_x} / {group_x} / {card_x}）",
-)
+check(group_x == card_x, f"分组标题 / 卡片左对齐（{group_x} / {card_x}）")
 counts = [len(_cards_of(g)) for g in groups]
-check(counts == [3, 4, 1], f"每组卡片数 3/4/1（实际 {counts}）")
+check(counts == [3, 4, 2, 1], f"每组卡片数 3/4/2/1（实际 {counts}）")
 
 print("== 3. 下载目录副标题跟随 dirEdit ==")
 page.dirEdit.setText("X:/tmp/biliemoji")

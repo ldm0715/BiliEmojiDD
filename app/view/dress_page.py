@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from biliemoji import Dress
 from biliemoji.sanitize import sanitize_filename
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -32,8 +31,8 @@ from qfluentwidgets import (
 from app.common.config import cfg
 from app.common.exception import show_bili_error
 from app.common.notify import notify_info, notify_success, notify_warning
-from app.common.proxy import parse_proxy
 from app.common.theme import SECONDARY_TEXT
+from app.components import api_cache
 from app.components.content_meta import collection_meta, content_meta
 from app.components.download_queue import download_queue
 from app.components.download_runner import (
@@ -53,6 +52,7 @@ from app.components.page_scaffold import (
     page_title,
     title_row,
 )
+from app.components.search_history import SearchHistoryPanel
 from app.components.task import run_task
 from app.components.video_cache import video_cache
 from app.components.video_player import CollectionVideoPlayer
@@ -93,6 +93,10 @@ class DressPage(QWidget):
 
         self.searchBtn.clicked.connect(self._on_search)
         self.kwEdit.returnPressed.connect(self._on_search)
+        # 放大镜按钮走 searchSignal（SearchLineEdit 内部只把它连到自己的 search()），
+        # 不接的话点图标毫无反应
+        self.kwEdit.searchSignal.connect(self._on_search)
+        self.historyPanel.activated.connect(self._on_history_activated)
         self.backBtn.clicked.connect(self._go_back)
         self.detailBtn.clicked.connect(self._on_detail_download)
         self.queueBtn.clicked.connect(self._on_detail_add_to_queue)
@@ -125,6 +129,9 @@ class DressPage(QWidget):
         top_row.addWidget(self.onlyCollCheck)
         top_row.addWidget(self.multiBtn)
         top_row.addWidget(self.searchBtn)
+
+        # 搜索记录：浮层面板，点搜索框才下拉，不占命令卡版面
+        self.historyPanel = SearchHistoryPanel(self.kwEdit, "dress")
 
         # 多选行：只在多选态显示，隐藏时命令卡自动收缩一行
         self.selectRow, select_row = self.searchCard.add_row_widget()
@@ -267,11 +274,10 @@ class DressPage(QWidget):
             return
         self.searchBtn.setEnabled(False)
         self.hintLabel.setText("搜索中…")
+        self.historyPanel.record(keyword)
 
         def task():
-            return Dress(
-                cookie=cfg.cookie.value, proxies=parse_proxy(cfg.proxy.value)
-            ).search_dress_typed(_SEARCH_NUM, keyword=keyword)
+            return api_cache.search_dress(_SEARCH_NUM, keyword)
 
         run_task(
             task,
@@ -279,6 +285,11 @@ class DressPage(QWidget):
             on_error=lambda e: show_bili_error(e, self.searchPage),
             on_finished=lambda ok: self.searchBtn.setEnabled(True),
         )
+
+    def _on_history_activated(self, keyword: str) -> None:
+        """点历史胶囊 = 回填关键词并立即搜（命中缓存时几乎瞬时）。"""
+        self.kwEdit.setText(keyword)
+        self._on_search()
 
     def _show_results(self, summaries) -> None:
         self._last_summaries = list(summaries)
@@ -328,9 +339,7 @@ class DressPage(QWidget):
         self.stacked.setCurrentWidget(self.detailPage)
 
         def task():
-            return Dress(
-                cookie=cfg.cookie.value, proxies=parse_proxy(cfg.proxy.value)
-            ).certain_lottery_typed(act_id, lottery_id)
+            return api_cache.dress_collection(act_id, lottery_id)
 
         run_task(
             task,
