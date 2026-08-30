@@ -43,7 +43,7 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/check_proxy_hint.py     # 代理
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_shell.py          # 应用外壳：内置字体+首选族名+getFont 补丁/渲染后端/消息挂内容区/切页无动画
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_update.py         # 检查更新：版本比较/镜像增删改排/测速分档/关于组/更新弹窗/CHANGES 抽取/SHA-256/版本胶囊/加速卡收起
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_reload.py         # 重新加载：缓存作废顺序/网格失败态重试按钮/右键路径/video_cache.forget 不误删下载产物
-QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py     # 各页面亮/暗截图到 screenshots/（人工比对用）
+QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py     # 各页面亮/暗截图到 screenshots/（**给用户人工比对用，AI 不要自己截图验证**）
 
 # 主页展示图（非运行时代码，只在需要更新素材时手工跑；需网络，全量表情包需 Cookie）
 uv run python scripts/fetch_showcase.py --dry-run   # 先看要抓什么
@@ -88,7 +88,6 @@ Windows 终端默认 GBK，脚本里的中文断言文案会 `UnicodeEncodeError
 | `docs/proxy_diagnostics.md` | 代理：**只认设置页里那一个地址**（开关 + 地址框）、**`trust_env=False`** 断开 Windows 系统代理这条暗线、`app/common/net.py` 联网工厂、`cause_hint` 成因表、设置页「测试」按钮 |
 | `docs/app_shell.md` | 应用外壳：全局字体 LXGW 文楷等宽（**Qt 不认 woff2**、首选族名、qfluentwidgets `getFont` 硬编码字体族需打补丁 + `sys.modules` 重绑）、**FreeType 渲染后端**（`gdi` 实测无效）、消息提示统一挂 `stackedWidget`、**切页去掉上游 300ms 整页位移动画** |
 | `docs/update_and_packaging.md` | 检查更新与打包发布：**版本号唯一来源是 `pyproject.toml`**、GitHub Release 查询与更新弹窗（`MessageBoxBase` 的 yesButton 要先 disconnect）、**下载加速镜像 ≠ 代理**、自定义源的增删改排（三个配置项分工 + 「先算顺序再改成员」）、测速三档与三色胶囊、手写拖动排序、**校验和固定直连取**、`CHANGES.md` 发版流程、**编译打包全在 GitHub runner 上（tag 触发 + `workflow_dispatch` 手动试编译）**、Nuitka 参数逐条 + NSIS + 工作流、**非 ASCII 用户名下 Nuitka 的三处坑**、版本胶囊、**`ExpandSettingCard` 收起动画终值取到陈旧滚动条 range 导致「收不回去」** |
-
 | `docs/reload_media.md` | 重新加载：图片 / 视频加载失败后的右键菜单与可点击失败态、**三层缓存作废必须先清 `QPixmapCache` 再 request**、`video_cache.forget` 只删自己 mkdtemp 出来的临时文件（不碰下载产物）、`_SpinnerMixin` 的加载中 / 失败 / 重来三态 |
 
 **新增功能时同步更新**：`docs/` 下新建一篇（结构参照 `download_queue.md`），并登记进 `docs/README.md` 导航表与根 `README.md` 文档列表。
@@ -278,6 +277,11 @@ Windows 终端默认 GBK，脚本里的中文断言文案会 `UnicodeEncodeError
 - 全部表情包缓存（`cache.py`）：按 cookie 指纹 + 24h TTL 存 `%APPDATA%/biliEmojiDD/all_packages.json`；「全部表情包」页有「强制刷新」按钮绕过缓存。
 
 ## 验证
+
+**不要自己截图验证 UI**。`scripts/screenshot_pages.py` 的产物是给用户人工比对的，AI 不要跑它、
+也不要用截图来判断改动对不对——离屏渲染出的图跟真实观感对不上，看图下结论只会得出错误判断。
+一律用 `scripts/check_*.py` 那种**可断言的屏幕外脚本**（量几何、量状态、量信号），
+量不出来的部分如实说「这条需要人工看」，不要假装验证过。
 
 - 启动：`uv run python main.py`（弹窗，需人工查看）。
 - **屏幕外脚本**（`QT_QPA_PLATFORM=offscreen`）：`scripts/` 下已有多个可直接跑的断言脚本（命令见「常用命令」）。新写脚本的套路：构建页面 + 注入假数据（假 `EmotePackage` / 预置 `QPixmapCache.insert(url, pm)` 绕开网络）+ 断言几何/信号/像素，失败 `sys.exit(1)`。
