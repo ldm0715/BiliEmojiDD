@@ -75,7 +75,7 @@ Windows 终端默认 GBK，脚本里的中文断言文案会 `UnicodeEncodeError
 | `docs/development.md` | 环境、代码约定、**关键坑点 8 条**、修改指南 |
 | `docs/download_queue.md` | 下载队列初版（仅表情包）+ 下载设置 + 代理机制 |
 | `docs/collection_page.md` | 收藏集页改造 + 类别判别 + 混合队列 |
-| `docs/image_viewer.md` | 图片查看器：letterbox 方案 + qfluentwidgets 上游坑全清单 |
+| `docs/image_viewer.md` | 图片查看器：letterbox 方案 + **翻页按钮下移到底部信息行、关闭按钮贴图片右上角并固定白图标圆底** + qfluentwidgets 上游坑全清单 |
 | `docs/ui_polish.md` | UI 改进：暗色主题补全（全局调色板 + 主题化 Label）、网格响应式填充、下载双列 + 去阴影、侧栏主题切换 |
 | `docs/theme_grid_fixes.md` | 主题跟随 + 网格铺满 + 已下载徽标：主题切换三处失效根因、`QListView` gridSize 忽略 spacing、收藏集目录命名统一 |
 | `docs/setting_page_redesign.md` | 设置页改版：Fluent 设置卡片版式（分组 + 窄卡片 + 可展开行）、只改界面不改功能的落实、`ExpandSettingCard` 上游坑 |
@@ -150,6 +150,7 @@ Windows 终端默认 GBK，脚本里的中文断言文案会 `UnicodeEncodeError
 
 ## 图片查看器（`app/components/image_viewer.py`）
 
+- 翻页按钮在**底部信息行**（`‹ 名称 3/20 ›`），上游那两个 16×38 的贴边小箭头已 `hide()`；关闭按钮贴**图片框右上角**、白图标 + 半透明深色圆底（`_OverlayToolButton`）。
 - 入口只有 `show_image_viewer(items, index, parent)`（`items` 为 `[(name, url), ...]`，`parent` 传 `page.window()`）；两个详情页复用：`EmojiGrid.imageClicked` / `DressDetailGrid.imageClicked` → 页面槽 → 该函数。
 - 组件全部复用现成的：`HorizontalFlipView`（悬浮左右箭头 + 滚轮 + 平滑动画）、`MaskDialogBase`（窗口内遮罩）、`HorizontalPipsPager`（页码点，>15 张时隐藏）。图片走 `thumb_manager.request` + `signal_bus.thumbLoaded`，**先 connect 再 request**（命中 `QPixmapCache` 是同步 emit），只预取当前索引 ±2（一次性请求几十张会占满 3 线程的缩略图池）。
 - GIF 只显示首帧（`FlipView` 存 `QImage`，动图需 `QMovie`，其 delegate 不支持）。
@@ -211,11 +212,13 @@ Windows 终端默认 GBK，脚本里的中文断言文案会 `UnicodeEncodeError
 - **`NavigationInterface.addWidget(..., onClick=fn)` 已经会把 `fn` 连到 `widget.clicked`**（`NavigationPanel._registerWidget`）。再手动 `widget.clicked.connect(fn)` 就是连了两遍，一次点击跑两次——主题切换按钮曾因此「切了又切回」，看起来完全无效。
 - **设置卡片四条（详见 `docs/setting_page_redesign.md`）**：① `SettingCard.hBoxLayout` 末尾是 `addStretch(1)`，续 `addWidget` 即靠右排（`_WidgetSettingCard` 就靠这个挂 ComboBox/SpinBox）；② `HeaderSettingCard.addWidget` **只能调一次**（每次都会重新把 `expandButton` 塞进布局），多控件先包无边距容器；③ `ExpandSettingCard` 是 `QScrollArea` 子类，**没有 `setContent`**，标题行在 `.card` 上（写 `self.setContent` 直接 `AttributeError`，`MirrorSettingCard` 踩过），且 `ExpandLayout.count()` 恒为 0（`addWidget` 进的是另一个列表）；④ `addGroupWidget` 的行必须 `setFixedHeight`（展开高度按 `viewLayout.sizeHint()` 算）。**展开区要动态增删行**就别逐行 `addGroupWidget`（它会自己往中间插分隔线，回头很难摘干净）——`addGroupWidget` 只调一次塞进自管容器，改完调 `_adjustViewSize()` 重算高度。
 - **`InfoBar` 的 `duration=0` 是「立刻消失」不是「不消失」**：上游 `showEvent` 里 `if self.duration >= 0: QTimer.singleShot(self.duration, self.__fadeOut)`，**负数**才永不消失。写 0 的话诊断提示一闪而过、根本读不到。用 `notify.py` 的 `NEVER_DISMISS`。
+- **`FlipView` 的翻页箭头是 16×38 且钉在控件最左 / 最右**（`flip_view.py:175/332`）：图一宽两个箭头就隔了半屏。`image_viewer` 已把它们 `hide()` 并把翻页挪到底部信息行 —— 上游 `enterEvent/leaveEvent` 只 `fadeIn/fadeOut` 改 opacity、**从不 `show()`**，所以藏一次就够。
+- **遮罩层上的按钮必须自己钉死颜色**：`TransparentToolButton` 的图标按主题取色，亮色主题下是黑图标，压在纯黑遮罩上等于隐身（查看器关闭按钮「看不到」的根因）。用 `FluentIcon.X.icon(color=QColor("white"))` + 自绘半透明深色圆底，见 `image_viewer._OverlayToolButton`。
 - **`FluentIcon` 枚举名是 `CONSTRACT` 不是 `CONTRACT`**（官方把 contrast 拼错成 constract），用错名直接 `AttributeError`。
 - **`NavigationToolButton` 构造只有 `(icon, parent)`**（不像 `NavigationPushButton` 的 `(icon, text, isSelectable, parent)`）。
 - **`Pivot` 的两个槽要自己 `setCurrentItem`**：`Pivot` 只在**用户点击**时移动指示条（`itemClicked → _onItemClicked → setCurrentItem`），程序化调用 `onClick` 槽不会同步指示条；反过来 `setCurrentItem` 也不触发 `onClick`。所以初始化要两句都写，且槽内主动 `setCurrentItem`（收藏集详情页换收藏集、断言脚本都会程序化调用这两个槽）。
 - **改上游组件按钮的行为前先 `clicked.disconnect()`**：`StandardMediaPlayBar.__initWidgets` 已把两个 skip 按钮连到 `skipBack(10000)`/`skipForward(30000)`，直接再 connect 会一次点击跑两件事。
-- **不要覆写组件库按钮的 `__init__`**：`PushButton.__init__` 是库自实现的 `singledispatchmethod`，`(text, parent)` 那个重载内部会**再调一次 `self.__init__(parent=parent)`**；子类若把 `text` 声明成必填位置参数，这次内部调用直接 `TypeError: missing 1 required positional argument`（`_HistoryChip` 崩过）。子类初始化一律走库留的 **`_postInit()`** 钩子——注意它在 `setText` 之前执行，依赖文本的东西（tooltip 等）只能建完对象再设。**`InfoBadge` 同源同坑**（`(text, parent, level)` 重载内部再调 `self.__init__(parent, level)`），且它**没有 `_postInit`**——`_PillBadge` 因此只覆写 `sizeHint`，别加 `__init__`。
+- **不要覆写组件库按钮的 `__init__`**：`PushButton.__init__` 是库自实现的 `singledispatchmethod`，`(text, parent)` 那个重载内部会**再调一次 `self.__init__(parent=parent)`**；子类若把 `text` 声明成必填位置参数，这次内部调用直接 `TypeError: missing 1 required positional argument`（`_HistoryChip` 崩过）。子类初始化一律走库留的 **`_postInit()`** 钩子——注意它在 `setText` 之前执行，依赖文本的东西（tooltip 等）只能建完对象再设。**`InfoBadge` 同源同坑**（`(text, parent, level)` 重载内部再调 `self.__init__(parent, level)`），且它**没有 `_postInit`**——`_PillBadge` 因此只覆写 `sizeHint`，别加 `__init__`。**`ToolButton` 也同源同坑**：`_OverlayToolButton` 走 `_postInit()` 钩子。
 - **组件库播放条的播放/暂停图标只在 `mediaStatusChanged` 时刷**：任何不经过按钮的暂停（`hideEvent` 的自动 pause：切 tab、换父控件、切导航页）之后图标都不复位。接 `player.playbackStateChanged` 自己同步。
 - **切页动画会把整页重绘十几帧**：`PopUpAniStackedWidget.setCurrentIndex` 每次切页跑 300ms 的整页 `pos` 动画（`deltaY=76`），主页/设置页单帧重绘就 11–12ms，肉眼卡。`MainWindow._set_current_interface` 跳过动画直接 `QStackedWidget.setCurrentIndex`，并**换掉 `stackedWidget` 实例上的 `setCurrentWidget` 方法**——切页有三个入口（侧栏点击 / `switchTo` / 标题栏返回按钮的 `qrouter.pop()`），只覆写 `switchTo` 盖不全。
 - **`getFont()` 硬编码字体族**：`qfluentwidgets/common/font.py::getFont` 写死 `['Segoe UI', 'Microsoft YaHei', 'PingFang SC']`，组件库每个控件构造时都 `setFont(getFont(...))`，所以 `QApplication.setFont` 对它们无效。换字体必须打补丁，而且要扫 `sys.modules` 重绑——库里 21 个模块 `from ...common.font import getFont` 在导入时就绑死了函数对象（`setFont` 不用重绑，它在自己模块 globals 里查）。见 `app/common/font.py`。

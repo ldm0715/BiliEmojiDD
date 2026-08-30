@@ -88,13 +88,39 @@ def _emit_clicked(self, index: int, it) -> None:
 
 | 操作 | 实现 |
 |---|---|
-| 左右翻页 | 悬浮箭头（组件自带）/ 滚轮（自带）/ 方向键（dialog `keyPressEvent`） |
-| 关闭 | Esc（QDialog 默认 reject，`MaskDialogBase.done` 自带淡出）/ 点击遮罩空白处 / 右上角关闭按钮 |
+| 左右翻页 | **底部信息行的 `‹` / `›` 按钮** / 滚轮（组件自带）/ 方向键（dialog `keyPressEvent`） |
+| 关闭 | Esc（QDialog 默认 reject，`MaskDialogBase.done` 自带淡出）/ 点击遮罩空白处 / **贴在图片框右上角的关闭按钮** |
+| 重新加载 | 在图片上右键 →「重新加载」（`_reload_current`，走 `thumb_manager.reload`） |
 | 页码 | 名称 + `"3 / 12"` 文字 + `HorizontalPipsPager`（>`_MAX_PIPS`(=15) 张时隐藏点，只留文字） |
 
-`flipView` 与 `pips` 都设 `NoFocus`：FlipView 继承 QListWidget 会吞掉方向键去改 currentRow，pips 同理，方向键要交给 dialog。
+`flipView` 与 `pips` 都设 `NoFocus`：FlipView 继承 QListWidget 会吞掉方向键去改 currentRow，pips 同理，方向键要交给 dialog。翻页按钮同样 `NoFocus`。
 
-箭头改为**常显**（`sync_arrows` 按首尾设透明度）：上游只在 hover 时淡入，但遮罩层里没有别的可交互元素，藏起来太难发现。
+#### 翻页按钮为什么从图上挪到底部
+
+上游 `FlipView` 自带的 `ScrollButton` 是 **16×38**（`flip_view.py:175`）且被 `resizeEvent`
+（`:332`）钉在控件的**最左 / 最右两个极边**。查看器的图片框最宽 900px（`_MAX_W`），
+于是两个 16px 宽的小箭头相隔近一屏 —— 又小又远又难找。现在：
+
+- `_ViewerFlipView.__init__` 里 `preButton.hide()` / `nextButton.hide()` 一次性藏死。
+  上游的 `enterEvent` / `leaveEvent` 只做 `fadeIn` / `fadeOut`（改 `opacity` 属性），
+  **从不调 `show()`**，所以藏一次就不会自己冒出来，不需要再覆写这两个事件。
+- 底部信息行改成 `‹  名称  3 / 20  ›`，两个 36×36 的按钮紧挨着页码；
+  首尾禁用在 `_sync_ui()` 里跟着索引一起刷（原来那句 `flipView.sync_arrows()` 的位置）。
+
+#### 关闭按钮：跟着图片走 + 固定白图标
+
+原先钉在**整个窗口**右上角（`self.width() - 52, 16`），窗口越大离图片越远；更要命的是
+`TransparentToolButton` 的图标**按主题取色**，亮色主题下是黑图标压在纯黑遮罩上，
+基本等于隐身 —— 「有时候甚至看不到」就是这么来的。现在：
+
+- `_place_close_button()` 按 `self.widget`（居中内容容器）的几何算位置，贴在图片框右上角外侧，
+  并用 `min` / `max` 夹住防止窄窗口下出界。`self.widget` 的几何要等布局跑完才有，
+  所以 `resizeEvent` 之外还在 `showEvent` 里补摆一次（构造期那次量到的是 0 尺寸）。
+- 翻页与关闭统一用本文件的 `_OverlayToolButton`：`setIcon` 把 `FluentIconBase` 换成
+  **白色 svg**（`FluentIcon.CLOSE.icon(color=QColor("white"))`），`paintEvent` 先画一层
+  半透明深色圆底再交给上游画图标。这样任何主题、任何图片底色上都看得见。
+  它**不覆写 `__init__`**（`ToolButton.__init__` 是 `singledispatchmethod`，见第五节第 9 条），
+  尺寸/光标全放在 `_postInit()`。
 
 ## 四、修复的既有问题
 
@@ -114,9 +140,11 @@ def _emit_clicked(self, index: int, it) -> None:
 3. **`MaskDialogBase` 把 `self.widget` 无对齐地塞进 `_hBoxLayout`** → 铺满整个 dialog，「点击遮罩空白处关闭」永远判不出来。须按 `MessageBoxBase` 的做法 `removeWidget` 后 `addWidget(self.widget, 1, Qt.AlignCenter)` 重新居中。
 4. **`PipsPager.setCurrentIndex` 会发 `currentIndexChanged`**（经 `scrollToItem`）。与 FlipView 双向绑定时要么加 guard、要么依赖 `FlipView.setCurrentIndex` 的同值早退；`setPageNumber` 内部也会 `setCurrentIndex(0)` 发一次信号，**接线要放在它之后**。
 5. **`FlipView.setCurrentIndex` 在 `index == currentIndex()` 时早退不发信号**，而 `addImages` 已把 `_currentIndex` 置为 0 → 初始索引为 0 时必须**手动同步一次** UI，不能依赖信号。
-6. **`FlipView` 的 `ScrollButton` 淡入淡出是 `QPropertyAnimation`**：直接 `setOpacity` 会被正在跑的动画盖掉，`sync_arrows` 里要先 `opacityAni.stop()`。
-7. **`closeBtn` 在基类 `setGeometry` 之后创建**，之后未必再触发 `resizeEvent` → 须在 `__init__` 主动摆一次位置。
+6. **`FlipView` 的 `ScrollButton` 淡入淡出是 `QPropertyAnimation`**：直接 `setOpacity` 会被正在跑的动画盖掉。本组件已改为 `hide()` 藏死（`fadeIn` / `fadeOut` 不调 `show()`，藏了就不会自己回来），翻页移到底部信息行。
+7. **`closeBtn` 在基类 `setGeometry` 之后创建**，之后未必再触发 `resizeEvent` → 须在 `__init__` 主动摆一次位置；它现在还依赖 `self.widget` 的布局结果，所以 `showEvent` 里要再摆一次。
 8. **`FlowLayout.itemAt(i)` 返回 `QWidgetItem`**（要 `.widget()`），而 `takeAt(i)` 直接返回 widget —— 两者不一致，写测试时容易踩。
+9. **`ToolButton.__init__` 是 `singledispatchmethod`**：`(icon, parent)` 那个重载内部会再调一次 `self.__init__(parent=parent)`，子类覆写 `__init__` 直接 TypeError（同 `PushButton` / `InfoBadge`）。`_OverlayToolButton` 因此只用 `_postInit()` 钩子，图标着色走覆写 `setIcon`。
+10. **`TransparentToolButton` 的图标按主题取色**：亮色主题下是黑图标。压在纯黑遮罩上就是隐身，遮罩层上的按钮必须自己钉死颜色。
 
 ## 六、已知限制
 
@@ -126,9 +154,11 @@ def _emit_clicked(self, index: int, it) -> None:
 ## 七、验证
 
 - `uv run ruff check .` 通过；`uv run python -c "import app.MainWindow"` 导入自检通过。
-- `QT_QPA_PLATFORM=offscreen uv run python scripts/check_image_viewer.py` —— 30 项断言全过，其中关键结论：
+- `QT_QPA_PLATFORM=offscreen uv run python scripts/check_image_viewer.py` —— 断言全过，其中关键结论：
   - 三张源图（1600×900 / 600×1400 / 64×64）letterbox 后画布与 `sizeHint` **完全一致**（793×602），证明滚动不会跑偏；
   - `widget` 为 793×650 而 dialog 为 1280×860，证明内容区未铺满遮罩，**点击遮罩关闭确实可用**（第五节第 3 条）；
-  - 首尾箭头显隐、pips 双向绑定、方向键、点遮罩关闭均正确。
+  - 上游两个贴边小箭头确实藏住了，底部 `‹` / `›` 能驱动 flipView 且首尾自动禁用；
+  - 关闭按钮在 1280×860 与 598×520 两种尺寸下都落在图片框右上角且**完全在遮罩内**；
+  - pips 双向绑定、方向键、点遮罩关闭、右键重新加载后内存缓存作废均正确。
 - `QT_QPA_PLATFORM=offscreen uv run python scripts/check_grid_click.py` —— 11 项断言全过，覆盖：`EmojiGrid` 空 url 过滤后索引对齐、载荷为**同一对象**时 `DressDetailGrid` 仍各自定位、`PackageGrid` / `QueueList` 转发未被基类改动破坏。
 - 真实 B 站网络流程依赖用户 Cookie，需人工 `uv run python main.py` 验证：两个详情页点图、翻页、GIF 首帧、窗口缩放后重开、深/浅主题各一次。

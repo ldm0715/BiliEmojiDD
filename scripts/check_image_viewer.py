@@ -71,25 +71,34 @@ check(viewer.countLabel.text() == "2 / 3", f"页码文字（实际 {viewer.count
 check(viewer.nameLabel.text() == "tall", f"名称文字（实际 {viewer.nameLabel.text()!r}）")
 check(viewer.pips.currentIndex() == 1, f"pips 同步（实际 {viewer.pips.currentIndex()}）")
 
-print("== 翻页 + 箭头显隐 ==")
+print("== 翻页 + 首尾禁用 ==")
+check(fv.preButton.isHidden() and fv.nextButton.isHidden(), "上游那两个贴边小箭头已藏起")
 fv.scrollNext()
 app.processEvents()
 check(fv.currentIndex() == 2, f"scrollNext → index 2（实际 {fv.currentIndex()}）")
 check(viewer.countLabel.text() == "3 / 3", f"页码跟随（实际 {viewer.countLabel.text()!r}）")
 check(viewer.pips.currentIndex() == 2, "pips 跟随")
-check(fv.nextButton.opacity == 0.0, f"末张隐藏右箭头（实际 {fv.nextButton.opacity}）")
-check(fv.preButton.opacity == 1.0, f"末张显示左箭头（实际 {fv.preButton.opacity}）")
+check(not viewer.nextBtn.isEnabled(), "末张禁用「下一张」")
+check(viewer.prevBtn.isEnabled(), "末张「上一张」可用")
 
 fv.scrollNext()
 app.processEvents()
 check(fv.currentIndex() == 2, "末张再 scrollNext 不越界")
 
+print("== 底部翻页按钮驱动 flipView ==")
+viewer.prevBtn.click()
+app.processEvents()
+check(fv.currentIndex() == 1, f"点「上一张」→ index 1（实际 {fv.currentIndex()}）")
+viewer.nextBtn.click()
+app.processEvents()
+check(fv.currentIndex() == 2, f"点「下一张」→ index 2（实际 {fv.currentIndex()}）")
+
 for _ in range(3):
     fv.scrollPrevious()
     app.processEvents()
 check(fv.currentIndex() == 0, f"回到首张（实际 {fv.currentIndex()}）")
-check(fv.preButton.opacity == 0.0, f"首张隐藏左箭头（实际 {fv.preButton.opacity}）")
-check(fv.nextButton.opacity == 1.0, f"首张显示右箭头（实际 {fv.nextButton.opacity}）")
+check(not viewer.prevBtn.isEnabled(), "首张禁用「上一张」")
+check(viewer.nextBtn.isEnabled(), "首张「下一张」可用")
 
 print("== pips 反向驱动 flipView ==")
 viewer.pips.setCurrentIndex(2)
@@ -104,6 +113,41 @@ check(
     f"widget {geo.size().toTuple()} 小于 dialog {viewer.size().toTuple()}",
 )
 check(not geo.contains(QPoint(4, 4)), "遮罩左上角落在内容区之外")
+
+print("== 关闭按钮贴在图片框右上角且不出界 ==")
+for w, h in ((1280, 860), (598, 520)):
+    host.resize(w, h)
+    viewer.resize(host.size())
+    app.processEvents()
+    viewer._place_close_button()
+    btn = viewer.closeBtn.geometry()
+    content = viewer.widget.geometry()
+    check(
+        viewer.rect().contains(btn),
+        f"{w}x{h}：按钮 {btn.getRect()} 完全在遮罩内",
+    )
+    check(
+        btn.left() >= content.center().x(),
+        f"{w}x{h}：按钮在图片框右半边（btn.x={btn.left()} content.cx={content.center().x()}）",
+    )
+    check(
+        btn.top() <= content.center().y(),
+        f"{w}x{h}：按钮在图片框上半边（btn.y={btn.top()} content.cy={content.center().y()}）",
+    )
+host.resize(1280, 860)
+viewer.resize(host.size())
+app.processEvents()
+
+print("== 右键重新加载 ==")
+reload_url = items[fv.currentIndex()][1]
+QPixmapCache.insert(reload_url, QPixmap(32, 32))  # 确保缓存里有东西可清
+viewer._reload_current()
+app.processEvents()
+probe = QPixmap()
+check(
+    not QPixmapCache.find(reload_url, probe),
+    "重新加载后内存缓存已作废（下次 request 会真的重下）",
+)
 
 print("== 键盘方向键 ==")
 before = fv.currentIndex()

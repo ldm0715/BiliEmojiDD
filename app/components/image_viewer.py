@@ -11,13 +11,15 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     CaptionLabel,
     FluentIcon,
+    FluentIconBase,
     HorizontalFlipView,
     HorizontalPipsPager,
+    RoundMenu,
     TransparentToolButton,
 )
 
@@ -33,6 +35,47 @@ _MAX_H = 700
 _MAX_UPSCALE = 2  # 小图最多放大几倍（表情只有一两百像素，完全不放大会显得过小）
 _PREFETCH = 2  # 当前索引前后各预取几张
 _MAX_PIPS = 15  # 超过这个数量就不显示页码点（点太多没意义）
+_OVERLAY_BTN = 36  # 遮罩上按钮（翻页 / 关闭）的直径
+_CLOSE_GAP = 8  # 关闭按钮与图片框右上角的间距
+
+
+class _OverlayToolButton(TransparentToolButton):
+    """遮罩层上的圆形按钮：**固定白图标 + 半透明深色圆底**，不随主题变。
+
+    上游 `TransparentToolButton` 的图标按主题取色，亮色主题下是黑图标 —— 压在纯黑遮罩上
+    等于隐身（关闭按钮「有时候甚至看不到」就是这么来的）。这里两头都钉死：
+    `setIcon` 把 `FluentIcon` 换成白色 svg，`paintEvent` 先画一层深色圆底保证对比度。
+
+    **不覆写 `__init__`**：`ToolButton.__init__` 是 `singledispatchmethod`，`(icon, parent)`
+    重载内部还会再调一次 `self.__init__(parent=parent)`，子类改签名会直接 TypeError。
+    初始化一律走库留的 `_postInit()` 钩子。
+    """
+
+    def _postInit(self) -> None:
+        super()._postInit()
+        self.setFixedSize(_OVERLAY_BTN, _OVERLAY_BTN)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # 方向键留给 dialog
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def setIcon(self, icon) -> None:
+        if isinstance(icon, FluentIconBase):
+            icon = icon.icon(color=QColor("white"))
+        super().setIcon(icon)
+
+    def paintEvent(self, e) -> None:
+        painter = QPainter(self)
+        painter.setRenderHints(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        if not self.isEnabled():
+            alpha = 60
+        elif self.isPressed or self.isHover:
+            alpha = 170
+        else:
+            alpha = 110
+        painter.setBrush(QColor(0, 0, 0, alpha))
+        painter.drawEllipse(self.rect())
+        painter.end()
+        super().paintEvent(e)  # 上游负责画图标（含 disabled 的降透明度）
 
 
 def _viewer_item_size(parent: QWidget) -> QSize:
@@ -83,7 +126,7 @@ def _letterbox(pixmap: QPixmap, target: QSize, dpr: float) -> QImage:
 
 
 class _ViewerFlipView(HorizontalFlipView):
-    """针对 lightbox 调整行为的 FlipView（覆写三处，详见各方法注释）。"""
+    """针对 lightbox 调整行为的 FlipView（覆写两处，详见各方法注释）。"""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -92,6 +135,12 @@ class _ViewerFlipView(HorizontalFlipView):
         # 保证 viewport 宽度 == 控件宽度 == item 宽度，否则会露出下一张的边缘
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setViewportMargins(0, 0, 0, 0)
+        # 上游的翻页箭头只有 16×38 且钉在控件最左 / 最右（flip_view.py:175/332），
+        # 图片最宽 900px 时两个箭头相隔近一屏、又小又难找。翻页改到下方信息行集中放。
+        # hide() 是彻底的：上游 enter/leave 只做 fadeIn/fadeOut（改 opacity 属性），
+        # 从不调 show()，所以藏一次就不会自己冒出来。
+        self.preButton.hide()
+        self.nextButton.hide()
 
     def _adjustItemSize(self, item) -> None:
         """所有 item 尺寸恒等于 itemSize。
@@ -103,30 +152,6 @@ class _ViewerFlipView(HorizontalFlipView):
         统一 sizeHint 后两个问题都消失（代价是图片需预先 letterbox）。
         """
         item.setSizeHint(self.itemSize)
-
-    def sync_arrows(self) -> None:
-        """按首尾直接设定左右箭头透明度。
-
-        上游只在 hover 时淡入箭头，但遮罩层里没有别的可交互元素，藏起来太难发现，
-        这里改成常显。必须先 stop 掉上游 setCurrentIndex/enterEvent 起的淡入淡出动画，
-        否则动画会盖掉这里设的值。
-        """
-        index = self.currentIndex()
-        last = self.count() - 1
-        for button, visible in (
-            (self.preButton, index > 0),
-            (self.nextButton, 0 <= index < last),
-        ):
-            button.opacityAni.stop()
-            button.setOpacity(1.0 if visible else 0.0)
-
-    def enterEvent(self, e) -> None:
-        super().enterEvent(e)
-        self.sync_arrows()
-
-    def leaveEvent(self, e) -> None:
-        super().leaveEvent(e)  # 上游会 fadeOut 两个箭头
-        self.sync_arrows()  # 立刻改回常显
 
 
 class ImageViewer(MaskDialogBase):
@@ -168,6 +193,14 @@ class ImageViewer(MaskDialogBase):
 
         info_row = QHBoxLayout()
         info_row.setSpacing(12)
+        # 翻页按钮跟名称 / 页码挤在一起：上游那两个贴着图片左右极边的小箭头，
+        # 在 900px 宽的图上相隔近一屏，够不着也看不清
+        self.prevBtn = _OverlayToolButton(FluentIcon.CARE_LEFT_SOLID, self.widget)
+        self.prevBtn.setToolTip("上一张")
+        self.nextBtn = _OverlayToolButton(FluentIcon.CARE_RIGHT_SOLID, self.widget)
+        self.nextBtn.setToolTip("下一张")
+        self.prevBtn.clicked.connect(self.flipView.scrollPrevious)
+        self.nextBtn.clicked.connect(self.flipView.scrollNext)
         self.nameLabel = CaptionLabel("", self.widget)
         self.nameLabel.setStyleSheet("color: white; background: transparent;")
         self.countLabel = CaptionLabel("", self.widget)
@@ -175,8 +208,10 @@ class ImageViewer(MaskDialogBase):
             "color: rgba(255, 255, 255, 0.6); background: transparent;"
         )
         info_row.addStretch(1)
+        info_row.addWidget(self.prevBtn)
         info_row.addWidget(self.nameLabel)
         info_row.addWidget(self.countLabel)
+        info_row.addWidget(self.nextBtn)
         info_row.addStretch(1)
         layout.addLayout(info_row)
 
@@ -187,9 +222,8 @@ class ImageViewer(MaskDialogBase):
         self.pips.setVisible(1 < len(self._items) <= _MAX_PIPS)
         layout.addWidget(self.pips, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        self.closeBtn = TransparentToolButton(FluentIcon.CLOSE, self)
-        self.closeBtn.setFixedSize(36, 36)
-        self.closeBtn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.closeBtn = _OverlayToolButton(FluentIcon.CLOSE, self)
+        self.closeBtn.setToolTip("关闭")
         self.closeBtn.clicked.connect(self.reject)
         # 基类 __init__ 里已 setGeometry 过，之后未必再触发 resizeEvent → 主动摆一次
         self._place_close_button()
@@ -257,11 +291,34 @@ class ImageViewer(MaskDialogBase):
             self.nameLabel.setVisible(bool(name))
             self.countLabel.setText(f"{index + 1} / {len(self._items)}")
             self.pips.setCurrentIndex(index)
-            self.flipView.sync_arrows()
+            self.prevBtn.setEnabled(index > 0)
+            self.nextBtn.setEnabled(0 <= index < len(self._items) - 1)
         finally:
             self._syncing = False
 
     # ---- 交互 ----
+
+    def contextMenuEvent(self, e) -> None:
+        """右键当前图片 →「重新加载」：加载失败后不必干等，也不用退出重进。"""
+        if not self.flipView.geometry().contains(self.widget.mapFromParent(e.pos())):
+            return
+        menu = RoundMenu(parent=self)
+        action = QAction(FluentIcon.SYNC.icon(), "重新加载", menu)
+        action.triggered.connect(self._reload_current)
+        menu.addAction(action)
+        menu.exec(e.globalPos())
+
+    def _reload_current(self) -> None:
+        index = self.flipView.currentIndex()
+        if not (0 <= index < len(self._items)):
+            return
+        url = self._items[index][1]
+        if not url:
+            return
+        # 先退回占位图给个「正在重来」的反馈；回填照走 _on_thumb（按 url 匹配）
+        self.flipView.setItemImage(index, _placeholder(self._item_size, self._dpr))
+        self._requested.add(url)
+        thumb_manager.reload(url)
 
     def keyPressEvent(self, e) -> None:
         key = e.key()
@@ -284,8 +341,24 @@ class ImageViewer(MaskDialogBase):
         super().resizeEvent(e)
         self._place_close_button()
 
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        # self.widget 的几何由布局在 show 之后才定下来，构造期那次会量到 0 尺寸
+        self._place_close_button()
+
     def _place_close_button(self) -> None:
-        self.closeBtn.move(self.width() - self.closeBtn.width() - 16, 16)
+        """贴在图片框右上角外侧，跟着图片走。
+
+        钉在整个窗口右上角的话，窗口越大离图片越远，大屏上要满屏找关闭按钮。
+        max/min 夹一道，防止窄窗口下按钮跑出遮罩。
+        """
+        rect = self.widget.geometry()
+        x = min(
+            rect.right() + _CLOSE_GAP,
+            self.width() - self.closeBtn.width() - _CLOSE_GAP,
+        )
+        y = max(_CLOSE_GAP, rect.top() - _CLOSE_GAP)
+        self.closeBtn.move(max(_CLOSE_GAP, x), y)
         self.closeBtn.raise_()
 
 
