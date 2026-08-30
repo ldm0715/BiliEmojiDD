@@ -368,6 +368,30 @@ class MirrorSettingCard(ExpandGroupSettingCard):
         self.addRow.submitted.connect(self._on_add)
         self.reload()
 
+    # ---- 展开 / 收起 ----
+
+    def setExpand(self, isExpand: bool) -> None:
+        """收起时自己把高度落回标题行，不依赖上游那个陈旧的滚动条 `maximum()`。
+
+        上游 `ExpandSettingCard.setExpand(False)` 把收起动画的终值取自
+        `verticalScrollBar().maximum()`，而它覆写 `resizeEvent` 时**没有调 `super()`** ——
+        `QAbstractScrollArea.resizeEvent` 才是触发 `layoutChildren()/updateScrollBars()`
+        的地方，于是滚动条 range 停在构造期的值。本卡的展开区高度是构造之后才由
+        `reload() → _reload_rows() → _adjustViewSize()` 撑起来的，终值因此偏小
+        （实测收起后停在 292px 而不是 70px，也就是「展开了收不回去」）。
+        """
+        if self.isExpand == isExpand:
+            return
+        self._adjustViewSize()  # 行数变过时先把 spaceWidget / 展开高度算准
+        super().setExpand(isExpand)
+        if isExpand:
+            return
+        # 动画终点交给我们自己钉死：停掉动画、把滚动条推到底、高度落回标题行
+        self.expandAni.stop()
+        bar = self.verticalScrollBar()
+        bar.setValue(bar.maximum())
+        self.setFixedHeight(self.card.height())
+
     # ---- 列表 ----
 
     def reload(self) -> None:

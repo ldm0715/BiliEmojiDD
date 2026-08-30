@@ -322,6 +322,20 @@ checkout → setup-uv → `uv python install 3.11` → `uv sync --all-groups` �
 Python 锁死 3.11：qfluentwidgets 这个 fork 要求 `PySide6<=6.4.2`，而 6.4.2 没有 3.12 的
 wheel（见 CLAUDE.md 环境约束）。
 
+### 「下载加速」卡展开后收不起来（上游坑）
+
+`ExpandSettingCard.setExpand(False)` 把收起动画的终值取自 `verticalScrollBar().maximum()`，
+而同一个类**覆写 `resizeEvent` 时没有调 `super()`** —— `QAbstractScrollArea.resizeEvent`
+才是触发 `layoutChildren() / updateScrollBars()` 的地方，于是滚动条的 range 一直停在构造期的值。
+
+`MirrorSettingCard` 的展开区高度是构造**之后**才由 `reload() → _reload_rows() →
+_adjustViewSize()` 撑起来的，收起时拿到的 `maximum()` 因此偏小：实测动画只把高度从 368
+降到 **292**（应为 70），看起来就是「展开了再也收不回去」。
+
+修法是在 `MirrorSettingCard` 里覆写 `setExpand`：先 `_adjustViewSize()` 把高度算准，
+调完 `super()` 后，收起方向自己把动画停掉、滚动条推到底、`setFixedHeight(self.card.height())`
+钉死终点。回归断言见 `scripts/check_update.py` 第 4c 节（连开两轮，确认不是一次性的）。
+
 ---
 
 ## 七、版本号胶囊

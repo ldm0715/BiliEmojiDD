@@ -334,6 +334,43 @@ remove_custom_mirror(custom)
 card.reload()
 settle()
 
+print("== 4c. 加速卡展开后收得回去 ==")
+# 上游 ExpandSettingCard 收起动画的终值取自 verticalScrollBar().maximum()，而它覆写
+# resizeEvent 时没调 super() → range 停在构造期的陈旧值，实测收起后高度卡在 292 而不是 70
+
+
+def settle_ani(ani, timeout: float = 2.0) -> None:
+    """等属性动画真正跑完：光 processEvents 不推进真实时间，必须带 sleep 轮询。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        app.processEvents()
+        if ani.state() != ani.State.Running:
+            return
+        time.sleep(0.01)
+
+
+card.setExpand(False)
+settle_ani(card.expandAni)
+check(
+    card.height() == card.card.height(),
+    f"初始收起态高度 == 标题行（{card.height()}）",
+)
+for round_no in (1, 2):  # 连开两轮，确认不是一次性的
+    card.card.expandButton.click()
+    settle_ani(card.expandAni)
+    check(card.isExpand, f"第 {round_no} 轮：点下拉按钮后展开")
+    check(
+        card.height() > card.card.height(),
+        f"第 {round_no} 轮：展开后高度撑开（{card.height()} > {card.card.height()}）",
+    )
+    card.card.expandButton.click()
+    settle_ani(card.expandAni)
+    check(not card.isExpand, f"第 {round_no} 轮：再点一次收起")
+    check(
+        card.height() == card.card.height(),
+        f"第 {round_no} 轮：收起后高度落回标题行（{card.height()} == {card.card.height()}）",
+    )
+
 print("== 5. 检查结果分支 ==")
 same = ReleaseInfo(tag=f"v{version}", notes="x", html_url="https://example/r")
 page._on_release(same)

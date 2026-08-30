@@ -41,7 +41,7 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/check_search_cache.py   # 搜索
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_home_page.py      # 主页：功能卡路由/英雄卡状态/队列预览/展示图降级/响应式列数/滚到底
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_proxy_hint.py     # 代理：地址规范化/旧 API 已删/trust_env=False/开关语义/因果翻译
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_shell.py          # 应用外壳：内置字体+首选族名+getFont 补丁/渲染后端/消息挂内容区/切页无动画
-QT_QPA_PLATFORM=offscreen uv run python scripts/check_update.py         # 检查更新：版本比较/镜像增删改排/测速分档/关于组/更新弹窗/CHANGES 抽取/SHA-256/版本胶囊
+QT_QPA_PLATFORM=offscreen uv run python scripts/check_update.py         # 检查更新：版本比较/镜像增删改排/测速分档/关于组/更新弹窗/CHANGES 抽取/SHA-256/版本胶囊/加速卡收起
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_reload.py         # 重新加载：缓存作废顺序/网格失败态重试按钮/右键路径/video_cache.forget 不误删下载产物
 QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py     # 各页面亮/暗截图到 screenshots/（人工比对用）
 
@@ -87,7 +87,7 @@ Windows 终端默认 GBK，脚本里的中文断言文案会 `UnicodeEncodeError
 | `docs/home_page.md` | 主页（欢迎页）：英雄卡 + 功能入口卡 + 快速上手 / 关于 / 最近搜索、`static/showcase` 静态素材与抓取脚本、**`ImageLabel` 每帧平滑缩放**、**`FlowLayout` sizeHint 只有一行高导致重叠**、定尺寸子项顶高最小宽度、`SmoothScroll.duration` 步数必须为整数 |
 | `docs/proxy_diagnostics.md` | 代理：**只认设置页里那一个地址**（开关 + 地址框）、**`trust_env=False`** 断开 Windows 系统代理这条暗线、`app/common/net.py` 联网工厂、`cause_hint` 成因表、设置页「测试」按钮 |
 | `docs/app_shell.md` | 应用外壳：全局字体 LXGW 文楷等宽（**Qt 不认 woff2**、首选族名、qfluentwidgets `getFont` 硬编码字体族需打补丁 + `sys.modules` 重绑）、**FreeType 渲染后端**（`gdi` 实测无效）、消息提示统一挂 `stackedWidget`、**切页去掉上游 300ms 整页位移动画** |
-| `docs/update_and_packaging.md` | 检查更新与打包发布：**版本号唯一来源是 `pyproject.toml`**、GitHub Release 查询与更新弹窗（`MessageBoxBase` 的 yesButton 要先 disconnect）、**下载加速镜像 ≠ 代理**、自定义源的增删改排（三个配置项分工 + 「先算顺序再改成员」）、测速三档与三色胶囊、手写拖动排序、**校验和固定直连取**、`CHANGES.md` 发版流程、Nuitka 参数逐条 + NSIS + 工作流、**非 ASCII 用户名下 Nuitka 的三处坑**、版本胶囊 |
+| `docs/update_and_packaging.md` | 检查更新与打包发布：**版本号唯一来源是 `pyproject.toml`**、GitHub Release 查询与更新弹窗（`MessageBoxBase` 的 yesButton 要先 disconnect）、**下载加速镜像 ≠ 代理**、自定义源的增删改排（三个配置项分工 + 「先算顺序再改成员」）、测速三档与三色胶囊、手写拖动排序、**校验和固定直连取**、`CHANGES.md` 发版流程、Nuitka 参数逐条 + NSIS + 工作流、**非 ASCII 用户名下 Nuitka 的三处坑**、版本胶囊、**`ExpandSettingCard` 收起动画终值取到陈旧滚动条 range 导致「收不回去」** |
 
 | `docs/reload_media.md` | 重新加载：图片 / 视频加载失败后的右键菜单与可点击失败态、**三层缓存作废必须先清 `QPixmapCache` 再 request**、`video_cache.forget` 只删自己 mkdtemp 出来的临时文件（不碰下载产物）、`_SpinnerMixin` 的加载中 / 失败 / 重来三态 |
 
@@ -217,6 +217,13 @@ Windows 终端默认 GBK，脚本里的中文断言文案会 `UnicodeEncodeError
 - **`NavigationInterface.addWidget(..., onClick=fn)` 已经会把 `fn` 连到 `widget.clicked`**（`NavigationPanel._registerWidget`）。再手动 `widget.clicked.connect(fn)` 就是连了两遍，一次点击跑两次——主题切换按钮曾因此「切了又切回」，看起来完全无效。
 - **设置卡片四条（详见 `docs/setting_page_redesign.md`）**：① `SettingCard.hBoxLayout` 末尾是 `addStretch(1)`，续 `addWidget` 即靠右排（`_WidgetSettingCard` 就靠这个挂 ComboBox/SpinBox）；② `HeaderSettingCard.addWidget` **只能调一次**（每次都会重新把 `expandButton` 塞进布局），多控件先包无边距容器；③ `ExpandSettingCard` 是 `QScrollArea` 子类，**没有 `setContent`**，标题行在 `.card` 上（写 `self.setContent` 直接 `AttributeError`，`MirrorSettingCard` 踩过），且 `ExpandLayout.count()` 恒为 0（`addWidget` 进的是另一个列表）；④ `addGroupWidget` 的行必须 `setFixedHeight`（展开高度按 `viewLayout.sizeHint()` 算）。**展开区要动态增删行**就别逐行 `addGroupWidget`（它会自己往中间插分隔线，回头很难摘干净）——`addGroupWidget` 只调一次塞进自管容器，改完调 `_adjustViewSize()` 重算高度。
 - **`InfoBar` 的 `duration=0` 是「立刻消失」不是「不消失」**：上游 `showEvent` 里 `if self.duration >= 0: QTimer.singleShot(self.duration, self.__fadeOut)`，**负数**才永不消失。写 0 的话诊断提示一闪而过、根本读不到。用 `notify.py` 的 `NEVER_DISMISS`。
+- **`ExpandSettingCard` 收起动画的终值取自陈旧的滚动条 range**：`setExpand(False)` 用
+  `verticalScrollBar().maximum()` 做动画终值，而同一个类**覆写 `resizeEvent` 时没调 `super()`**
+  —— `QAbstractScrollArea.resizeEvent` 才是触发 `layoutChildren()/updateScrollBars()` 的地方，
+  于是 range 一直停在构造期的值。**展开区高度是构造之后才撑起来的卡片**（如 `MirrorSettingCard`
+  的行是 `reload()` 里加的）收起时会拿到偏小的终值，高度降不到底 —— 表现为「展开了收不回去」
+  （实测停在 292 而不是 70）。修法见 `MirrorSettingCard.setExpand`：收起方向自己
+  `expandAni.stop()` + 滚动条推到底 + `setFixedHeight(self.card.height())`。
 - **`FlipView` 的翻页箭头是 16×38 且钉在控件最左 / 最右**（`flip_view.py:175/332`）：图一宽两个箭头就隔了半屏。`image_viewer` 已把它们 `hide()` 并把翻页挪到底部信息行 —— 上游 `enterEvent/leaveEvent` 只 `fadeIn/fadeOut` 改 opacity、**从不 `show()`**，所以藏一次就够。
 - **遮罩层上的按钮必须自己钉死颜色**：`TransparentToolButton` 的图标按主题取色，亮色主题下是黑图标，压在纯黑遮罩上等于隐身（查看器关闭按钮「看不到」的根因）。用 `FluentIcon.X.icon(color=QColor("white"))` + 自绘半透明深色圆底，见 `image_viewer._OverlayToolButton`。
 - **`FluentIcon` 枚举名是 `CONSTRACT` 不是 `CONTRACT`**（官方把 contrast 拼错成 constract），用错名直接 `AttributeError`。
