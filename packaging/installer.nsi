@@ -1,4 +1,4 @@
-; BiliEmojiDD 安装程序（NSIS + MUI2）
+﻿; BiliEmojiDD 安装程序（NSIS + MUI2）
 ;
 ; 由 packaging/build.py 调用，参数从命令行传入：
 ;   makensis /DVERSION=0.1.0 /DSRCDIR=...\dist\BiliEmojiDD /DOUTFILE=...\setup.exe \
