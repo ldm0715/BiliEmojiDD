@@ -101,6 +101,16 @@ class DiskCache:
             if self._bytes > self._limit_fn():
                 self._evict()
 
+    def remove(self, key: str) -> None:
+        """作废一条缓存（「重新加载」用）。文件不在就当已经没了。"""
+        path = self._root / _digest(key)
+        with self._lock:
+            try:
+                size = path.stat().st_size
+            except OSError:
+                return
+            self._unlink(path, size)
+
     # ---- 容量 ----
     def size(self) -> int:
         """当前占用字节数（扫目录，同时刷新 running total）。"""

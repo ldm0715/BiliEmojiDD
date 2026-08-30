@@ -4,7 +4,7 @@ from __future__ import annotations
 from functools import partial
 
 from PySide6.QtCore import QRect, QSize, Qt, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -23,10 +23,12 @@ from qfluentwidgets import (
     IndeterminateProgressRing,
     InfoBadge,
     ListWidget,
+    RoundMenu,
     StrongBodyLabel,
     Theme,
     ToolTipFilter,
     ToolTipPosition,
+    TransparentToolButton,
 )
 from qfluentwidgets.common.style_sheet import ThemeColor
 
@@ -48,14 +50,18 @@ _CARD_GUTTER = 8  # 单元格宽度预留量，保证整行不换行溢出
 _SEL_INSET = 4  # 选中高亮相对卡片边缘的内缩，相邻卡片之间由此形成间隙
 _BADGE_MARGIN = 6  # 「已下载」徽标距卡片右上角的边距
 _SPINNER_SIZE = 28  # 缩略图加载环直径
+_RETRY_SIZE = 28  # 加载失败后的重试按钮直径
 
 
 class _SpinnerMixin:
-    """缩略图加载环：图片区居中显示 `IndeterminateProgressRing`，图到位即停。
+    """缩略图加载环 + 失败重试按钮：都居中盖在图片区，图到位即收。
 
     纯 object mixin（不继承 QObject，避免多重继承下的元类/构造纠缠），
-    卡片自己在 __init__ / resizeEvent / set_pixmap 里显式调用三个方法。
+    卡片自己在 __init__ / resizeEvent / set_pixmap 里显式调用这几个方法。
     缩略图池只有 3 个线程，一屏几十张图要排队，灰底看着像加载失败。
+
+    失败时把加载环换成一个「↻」按钮：右键菜单也能重载，但那是隐藏功能，
+    真加载失败的人不一定会去试。
     """
 
     def _init_spinner(self) -> None:
@@ -65,27 +71,81 @@ class _SpinnerMixin:
         # 点击穿透：加载环盖在图片按钮上，不能吃掉点击
         self._spinner.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._spinner.start()
+        # 重试按钮反过来必须能收到点击，所以不设穿透
+        self._retryBtn = TransparentToolButton(FluentIcon.SYNC, self)
+        self._retryBtn.setFixedSize(_RETRY_SIZE, _RETRY_SIZE)
+        self._retryBtn.setToolTip("加载失败，点击重新加载")
+        self._retryBtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._retryBtn.clicked.connect(self._on_retry_clicked)
+        self._retryBtn.hide()
+
+    def _on_retry_clicked(self) -> None:
+        # 回调由所在网格在建卡时注入（它才知道这张卡对应哪个 url），见 _CardGridBase.set_cards
+        callback = getattr(self, "_retry_cb", None)
+        if callable(callback):
+            callback()
 
     def _center_spinner(self, rect: QRect) -> None:
-        """把加载环钉在图片区中心（rect 为图片区在卡片坐标系中的矩形）。"""
-        spinner = getattr(self, "_spinner", None)
-        # 判据用 isHidden 而非 isVisible：卡片尚未 show() 时子控件 isVisible() 恒为
-        # False，用它会把建卡阶段的定位全部跳过，之后没有 resize 就再也不居中了
-        if spinner is None or spinner.isHidden():
-            return
-        spinner.move(
-            rect.center().x() - _SPINNER_SIZE // 2,
-            rect.center().y() - _SPINNER_SIZE // 2,
-        )
-        spinner.raise_()
+        """把加载环 / 重试按钮钉在图片区中心（rect 为图片区在卡片坐标系中的矩形）。"""
+        for widget, size in (
+            (getattr(self, "_spinner", None), _SPINNER_SIZE),
+            (getattr(self, "_retryBtn", None), _RETRY_SIZE),
+        ):
+            # 判据用 isHidden 而非 isVisible：卡片尚未 show() 时子控件 isVisible() 恒为
+            # False，用它会把建卡阶段的定位全部跳过，之后没有 resize 就再也不居中了
+            if widget is None or widget.isHidden():
+                continue
+            widget.move(
+                rect.center().x() - size // 2,
+                rect.center().y() - size // 2,
+            )
+            widget.raise_()
 
     def thumb_done(self) -> None:
-        """图片到位或确认取不到：停动画并隐藏（幂等，网格失败回调也走这里）。"""
+        """图片到位：停动画并隐藏（幂等）。"""
+        self._hide_spinner()
+        retry = getattr(self, "_retryBtn", None)
+        if retry is not None:
+            retry.hide()
+
+    def thumb_failed(self) -> None:
+        """确认取不到：收环、改显示重试按钮（网格的失败回调走这里）。"""
+        self._hide_spinner()
+        retry = getattr(self, "_retryBtn", None)
+        if retry is None or not retry.isHidden():
+            return
+        retry.show()
+        self._relayout_overlay()
+
+    def thumb_restart(self) -> None:
+        """重新开始加载：藏掉重试按钮、转回加载环（幂等）。"""
+        retry = getattr(self, "_retryBtn", None)
+        if retry is not None:
+            retry.hide()
+        spinner = getattr(self, "_spinner", None)
+        if spinner is not None and spinner.isHidden():
+            spinner.show()
+            spinner.start()
+            self._relayout_overlay()
+
+    def _hide_spinner(self) -> None:
         spinner = getattr(self, "_spinner", None)
         if spinner is None or spinner.isHidden():
             return
         spinner.stop()
         spinner.hide()
+
+    def _relayout_overlay(self) -> None:
+        """显隐切换后重新居中：卡片不一定会再收到 resizeEvent。
+
+        图片区各卡片叫法不一（`imageBtn` / `iconLabel`），按顺序找，都没有就用整卡。
+        """
+        for name in ("imageBtn", "iconLabel"):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                self._center_spinner(widget.geometry())
+                return
+        self._center_spinner(self.rect())
 
 
 def _package_cover_url(pkg):
@@ -420,6 +480,8 @@ class _CardGridBase(ListWidget):
             # (name, url) 元组字面量）会被 CPython 常量折叠成同一个对象
             card.clicked.connect(partial(self._emit_clicked, index))
             card.toggled.connect(self._on_card_toggled)
+            # 失败态那个「↻」按钮的落点：卡片自己不知道 url，网格才知道
+            card._retry_cb = partial(self.reload_url, url)
             self.addItem(item)
             self.setItemWidget(item, card)
             if url:
@@ -430,6 +492,31 @@ class _CardGridBase(ListWidget):
         self._last_cell = None  # 强制首次重排
         self._layout_items()
         self._update_visible()
+
+    # ---- 重新加载 ----
+
+    def reload_url(self, url: str | None) -> None:
+        """作废该 url 的缓存并重新拉一次（右键菜单与失败态「↻」共用）。"""
+        if not url:
+            return
+        self._requested.add(url)  # reload 自己会发请求，别让 _update_visible 再排一次
+        for card in self._url_cards.get(url, ()):
+            restart = getattr(card, "thumb_restart", None)
+            if callable(restart):
+                restart()
+        thumb_manager.reload(url)
+
+    def contextMenuEvent(self, event) -> None:
+        """右键卡片 →「重新加载」。加载失败后不必重开页面。"""
+        item = self.itemAt(event.pos())
+        url = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if not url:
+            return
+        menu = RoundMenu(parent=self)
+        action = QAction(FluentIcon.SYNC.icon(), "重新加载", menu)
+        action.triggered.connect(partial(self.reload_url, url))
+        menu.addAction(action)
+        menu.exec(event.globalPos())
 
     # ---- 卡片尺寸 ----
 
@@ -528,7 +615,11 @@ class _CardGridBase(ListWidget):
 
     def _on_thumb_failed(self, url: str) -> None:
         for card in self._url_cards.get(url, ()):
-            self._stop_spinner(card)
+            failed = getattr(card, "thumb_failed", None)
+            if callable(failed):
+                failed()  # 收环 + 亮出「↻」重试按钮
+            else:
+                self._stop_spinner(card)
 
     @staticmethod
     def _stop_spinner(card) -> None:

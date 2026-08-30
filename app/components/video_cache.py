@@ -107,6 +107,27 @@ class VideoCacheManager(QObject):
     def failed(self, url: str | None) -> bool:
         return bool(url) and url in self._failed
 
+    def forget(self, url: str | None) -> None:
+        """作废一个视频的缓存与失败标记，让下一次 `request()` 真的重下。
+
+        只删自己 `mkdtemp` 出来的临时文件；`remember()` 登记的是用户下载目录里的成品，
+        那是下载产物不是缓存，只从字典里摘掉引用。
+        """
+        if not url:
+            return
+        self._failed.discard(url)
+        path = self._cache.pop(url, None)
+        if path is None:
+            return
+        target = Path(path)
+        if _temp_dir is None or _temp_dir not in target.parents:
+            return
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            # Windows 上正在播放的文件占用中删不掉；Downloader 会覆盖重写
+            pass
+
     def request(self, url: str | None) -> None:
         """后台下载一个视频；已缓存 / 在途 / 失败过则直接返回。"""
         if not self._enabled or not url:

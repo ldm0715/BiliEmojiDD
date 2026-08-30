@@ -85,6 +85,19 @@ class ThumbManager(QObject):
             ThumbLoadTask(url, cfg.cookie.value, current_proxies())
         )
 
+    def reload(self, url: str | None) -> None:
+        """作废三层缓存后重新请求（右键「重新加载」/ 失败重试用）。
+
+        顺序要紧：先清 `QPixmapCache` 再 `request`，否则 request 会命中内存缓存、
+        直接把旧图（或失败前的残图）同步 emit 回去，看起来像没生效。
+        """
+        if not url:
+            return
+        QPixmapCache.remove(url)
+        image_cache.remove(url)
+        self._inflight.discard(url)
+        self.request(url)
+
     def _on_raw_loaded(self, url: str, image: QImage) -> None:
         """worker 线程解码完成，主线程转 QPixmap 并缓存（线程规则）。"""
         self._inflight.discard(url)

@@ -82,7 +82,8 @@ Media Foundation 自己的网络栈：
 - 独立 `QThreadPool(2)`，不占 `task_manager` 的 4 个线程；
 - worker 只下载，经常驻的 `signal_bus` 发 `videoRawReady`；主线程槽写缓存后再广播
   `videoReady`（载荷 None = 取不到）；
-- `_failed` 记失败，本会话不重试，防请求风暴；
+- `_failed` 记失败，本会话不重试，防请求风暴（要重来一次走 `forget(url)`，
+  见 `docs/reload_media.md`：右键播放器或直接点「视频加载失败，点击重试」）；
 - 临时目录是 `tempfile.mkdtemp(prefix="biliEmojiDD-video-")`，`cleanup()` 在
   `MainWindow.closeEvent` 里 `shutil.rmtree(ignore_errors=True)`——播放中的文件在 Windows 上
   可能仍被占用，删不掉就交给系统临时清理。

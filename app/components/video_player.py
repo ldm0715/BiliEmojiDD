@@ -12,12 +12,13 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPointF, QRectF, QSize, QSizeF, Qt, QUrl, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import QDialog, QGraphicsView, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
     FluentIcon,
     IndeterminateProgressRing,
+    RoundMenu,
     TransparentToolButton,
 )
 
@@ -88,6 +89,22 @@ class _VideoView(VideoWidget):
         QGraphicsView.leaveEvent(self, e)  # 上游会起定时器 fadeOut 控制条
 
 
+class _HintLabel(BodyLabel):
+    """覆盖层提示文字：失败态时整条可点（用来重试）。
+
+    **不覆写 `__init__`**：`FluentLabelBase.__init__` 是 `singledispatchmethod`，
+    `(text, parent)` 那个重载内部会再调一次 `self.__init__(parent)`，
+    子类改签名直接 TypeError（同 `PushButton` / `InfoBadge` 的坑）。
+    """
+
+    clicked = Signal()
+
+    def mousePressEvent(self, e) -> None:
+        super().mousePressEvent(e)
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+
+
 class CollectionVideoPlayer(QWidget):
     """按下标播放一组视频，自带「缓冲中 / 加载失败」覆盖层。
 
@@ -119,13 +136,15 @@ class CollectionVideoPlayer(QWidget):
         self.spinner.setFixedSize(_SPINNER_SIZE, _SPINNER_SIZE)
         self.spinner.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.spinner.hide()
-        self.hintLabel = BodyLabel("", self)
+        self.hintLabel = _HintLabel("", self)
         self.hintLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.hintLabel.setWordWrap(True)
         self.hintLabel.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         # 画面是黑底，提示文字固定用白色（不随主题变，否则亮色下白底黑字看不见）
         self.hintLabel.setStyleSheet("color: white; background: transparent;")
         self.hintLabel.hide()
+        # 失败态时这条提示放开鼠标事件，整条可点重试（右键菜单是隐藏功能，靠不住）
+        self.hintLabel.clicked.connect(self.reload_current)
 
         signal_bus.videoReady.connect(self._on_video_ready)
         # 播放/暂停按钮跟着真实播放状态走。上游只在 mediaStatusChanged 时刷图标，
@@ -226,7 +245,7 @@ class CollectionVideoPlayer(QWidget):
             return
         if video_cache.failed(url):
             self._pending_url = None
-            self._show_hint("视频加载失败")
+            self._show_hint("视频加载失败", retry=True)
             return
         # 未就绪：转加载环并排队下载，回来时在 _on_video_ready 里对 url 做校验
         self._pending_url = url
@@ -243,6 +262,17 @@ class CollectionVideoPlayer(QWidget):
         """下一个视频；已经是最后一个（或列表为空）就什么都不做。"""
         if 0 <= self._index < len(self._items) - 1:
             self.play(self._index + 1)
+
+    def reload_current(self) -> None:
+        """作废当前视频的缓存与失败标记后重播。
+
+        `video_cache` 失败一次就本会话不再重试（防请求风暴），没有这个入口的话
+        网络抖一下就只能一直盯着「视频加载失败」。
+        """
+        if not (0 <= self._index < len(self._items)):
+            return
+        video_cache.forget(self._items[self._index][1])
+        self.play(self._index)
 
     def is_playing(self) -> bool:
         return self.view.player.isPlaying()
@@ -280,7 +310,7 @@ class CollectionVideoPlayer(QWidget):
             return
         self._pending_url = None
         if path is None:
-            self._show_hint("视频加载失败")
+            self._show_hint("视频加载失败", retry=True)
             return
         self._start(path)
 
@@ -304,22 +334,35 @@ class CollectionVideoPlayer(QWidget):
 
     def _show_spinner(self, text: str) -> None:
         self.hintLabel.setText(text)
+        self._set_hint_clickable(False)  # 缓冲中点了没意义
         self.hintLabel.show()
         self.spinner.show()
         self.spinner.start()
         self._place_overlay()
 
-    def _show_hint(self, text: str) -> None:
+    def _show_hint(self, text: str, *, retry: bool = False) -> None:
         self.spinner.stop()
         self.spinner.hide()
-        self.hintLabel.setText(text)
+        self.hintLabel.setText(text + "，点击重试" if retry else text)
+        self._set_hint_clickable(retry)
         self.hintLabel.show()
         self._place_overlay()
+
+    def _set_hint_clickable(self, clickable: bool) -> None:
+        self.hintLabel.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, not clickable
+        )
+        self.hintLabel.setCursor(
+            Qt.CursorShape.PointingHandCursor
+            if clickable
+            else Qt.CursorShape.ArrowCursor
+        )
 
     def _hide_overlay(self) -> None:
         self.spinner.stop()
         self.spinner.hide()
         self.hintLabel.hide()
+        self._set_hint_clickable(False)  # 状态别留到下一次
 
     def _place_overlay(self) -> None:
         # 以画面区（不含下方控制条）为基准居中。覆盖层不进布局，所以一律用
@@ -337,6 +380,16 @@ class CollectionVideoPlayer(QWidget):
             cx - w // 2, cy + (4 if spinning else -h // 2), w, h
         )
         self.hintLabel.raise_()
+
+    def contextMenuEvent(self, event) -> None:
+        """右键 →「重新加载」：与失败态的「点击重试」同一条路径。"""
+        if not (0 <= self._index < len(self._items)):
+            return
+        menu = RoundMenu(parent=self)
+        action = QAction(FluentIcon.SYNC.icon(), "重新加载", menu)
+        action.triggered.connect(self.reload_current)
+        menu.addAction(action)
+        menu.exec(event.globalPos())
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
