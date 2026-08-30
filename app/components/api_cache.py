@@ -14,11 +14,10 @@ from __future__ import annotations
 
 import json
 
-from biliemoji import Dress, Emoji
 from biliemoji.models import DressCollection, DressCollectionSummary, EmotePackage
 
 from app.common.config import cfg
-from app.common.proxy import parse_proxy
+from app.common.net import make_dress, make_emoji
 from app.components.disk_cache import api_store
 
 _SEARCH_TTL = 6 * 3600  # 搜索结果：新品上架要能看到，给短一点
@@ -48,9 +47,7 @@ def search_dress(num: int, keyword: str) -> tuple[DressCollectionSummary, ...]:
     cached = _load(key, _SEARCH_TTL)
     if isinstance(cached, list):
         return tuple(DressCollectionSummary.from_dict(d) for d in cached)
-    result = Dress(
-        cookie=cfg.cookie.value, proxies=parse_proxy(cfg.proxy.value)
-    ).search_dress_typed(num, keyword=keyword)
+    result = make_dress(cookie=cfg.cookie.value).search_dress_typed(num, keyword=keyword)
     _save(key, [s.raw for s in result])
     return tuple(result)
 
@@ -61,9 +58,7 @@ def emoji_package(pid: int) -> EmotePackage:
     cached = _load(key, _DETAIL_TTL)
     if isinstance(cached, dict):
         return EmotePackage.from_dict(cached)
-    pkg = Emoji(
-        cookie=cfg.cookie.value, proxies=parse_proxy(cfg.proxy.value)
-    ).certain_emoji_typed(pid)
+    pkg = make_emoji(cookie=cfg.cookie.value).certain_emoji_typed(pid)
     _save(key, pkg.raw)
     return pkg
 
@@ -74,8 +69,6 @@ def dress_collection(act_id, lottery_id) -> DressCollection:
     cached = _load(key, _DETAIL_TTL)
     if isinstance(cached, dict):
         return DressCollection.from_dict(cached)
-    coll = Dress(
-        cookie=cfg.cookie.value, proxies=parse_proxy(cfg.proxy.value)
-    ).certain_lottery_typed(act_id, lottery_id)
+    coll = make_dress(cookie=cfg.cookie.value).certain_lottery_typed(act_id, lottery_id)
     _save(key, coll.raw)
     return coll

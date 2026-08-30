@@ -17,11 +17,10 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from biliemoji import Downloader, DownloadStatus, DownloadTask
+from biliemoji import DownloadStatus, DownloadTask
 from PySide6.QtCore import QObject, QRunnable, QThreadPool
 
-from app.common.config import cfg
-from app.common.proxy import parse_proxy
+from app.common.net import current_proxies, make_downloader
 from app.common.signal_bus import signal_bus
 
 _TEMP_PREFIX = "biliEmojiDD-video-"
@@ -54,7 +53,7 @@ class _VideoTask(QRunnable):
     def run(self) -> None:
         path = None
         try:
-            result = Downloader(max_workers=1, proxies=self._proxies).download(
+            result = make_downloader(max_workers=1, proxies=self._proxies).download(
                 DownloadTask(url=self._url, target=self._target, expected_ext=".mp4")
             )
             # SKIPPED = 目标文件已存在，同样可播
@@ -117,7 +116,7 @@ class VideoCacheManager(QObject):
         if self.local_path(url) is not None:
             return
         self._inflight.add(url)
-        self._pool.start(_VideoTask(url, _cache_path(url), parse_proxy(cfg.proxy.value)))
+        self._pool.start(_VideoTask(url, _cache_path(url), current_proxies()))
 
     def _on_raw(self, url: str, path) -> None:
         """worker 下载完成：主线程写缓存后广播（连接顺序保证播放器读得到）。"""

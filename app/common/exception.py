@@ -19,7 +19,7 @@ from biliemoji import (
 from qfluentwidgets import InfoBarPosition
 
 from app.common.config import cfg
-from app.common.notify import notify_error, notify_warning
+from app.common.notify import NEVER_DISMISS, notify_error, notify_warning
 from app.common.proxy import redact_proxy
 
 _MAX_CAUSE_DEPTH = 6  # 异常链一般两三层，给点余量即可
@@ -38,8 +38,10 @@ def _chain(exc: BaseException) -> list[tuple[str, str]]:
 
 
 def _proxy_suffix() -> str:
+    if not cfg.proxy_enabled.value:
+        return "当前未使用代理（代理开关已关闭）"
     proxy = redact_proxy(cfg.proxy.value or "")
-    return f"当前代理：{proxy}" if proxy else "当前未使用代理"
+    return f"当前代理：{proxy}" if proxy else "当前未使用代理（代理开关开着但地址为空）"
 
 
 def cause_hint(exc: BaseException) -> str:
@@ -52,20 +54,9 @@ def cause_hint(exc: BaseException) -> str:
         # 407 优先判：隧道失败的消息里往往同时带着 "Tunnel connection failed: 407"
         if "407" in text or "proxy authentication required" in text:
             return (
-                "代理要求认证。请到「设置 → 下载 → 代理」填写用户名与密码。"
+                "代理要求认证。请到「设置 → 下载 → 代理」把用户名密码写进地址，"
+                "形如 http://用户名:密码@主机:端口"
             )
-        if "tunnel connection failed" in text:
-            return (
-                "代理拒绝建立 HTTPS 隧道（CONNECT）。B 站接口全是 HTTPS，"
-                "只能转发明文 http:// 的代理用不了——需要换一个支持 CONNECT 的代理。"
-            )
-        if "only use http" in text:
-            return (
-                "该代理只讲明文 HTTP，不接受 TLS 握手。请到「设置 → 下载 → 代理」"
-                "把协议改成 HTTP（这里选的是代理自身的协议，不是被代理流量的协议）。"
-            )
-        if "socks" in text and "missing dependencies" in text:
-            return "socks 代理需要 PySocks，请执行 uv sync 后重启应用。"
         if (
             "refused" in text
             or "cannot connect to proxy" in text
@@ -75,15 +66,17 @@ def cause_hint(exc: BaseException) -> str:
             return "连不上代理服务器。请确认代理在运行、端口填对（ping 通只说明主机在，不代表该端口上有代理）。"
         if "timed out" in text or "timeout" in text:
             return "连接代理超时。请确认端口正确、代理允许本机访问。"
-        return "代理连接失败。请到「设置 → 下载 → 代理」检查协议 / 地址 / 端口 / 账号，或先清空代理试试。"
+        return (
+            "代理连接失败：地址 / 端口不对，或那个端口上根本不是代理。"
+            "（B 站接口全是 HTTPS，只会转发明文 http:// 的公开代理建不了 CONNECT 隧道，"
+            "这类地址用不了。）"
+        )
 
     if "InvalidSchema" in names or "InvalidProxyURL" in names:
-        if "socks" in text:
-            return "socks 代理需要 PySocks，请执行 uv sync 后重启应用。"
-        return "代理地址格式不对，请到「设置 → 下载 → 代理」重填。"
+        return "代理地址格式不对，请到「设置 → 下载 → 代理」重填，形如 http://127.0.0.1:7890。"
 
     if "SSLError" in names:
-        return "TLS 握手失败。若走了代理，多半是协议选成了 HTTPS 而代理只讲 HTTP。"
+        return "TLS 握手失败。若走了代理，多半是地址里的协议写成了 https:// 而代理只讲 HTTP。"
 
     if "ConnectTimeout" in names or "ReadTimeout" in names or "Timeout" in names:
         return "连接超时。请检查网络；若走了代理，确认代理可用。"
@@ -166,5 +159,5 @@ def show_bili_error(exc: Exception, parent=None) -> None:
             str(exc) or repr(exc),
             parent=parent,
             position=InfoBarPosition.TOP_RIGHT,
-            duration=0,
+            duration=NEVER_DISMISS,  # 不是 0——上游 0 表示「立刻淡出」
         )

@@ -8,13 +8,13 @@ dependencies = [
     "biliemoji==2.0.0",
     "PySide6==6.4.2",
     "PySide6-Fluent-Widgets @ git+https://github.com/ldm0715/PyQt-Fluent-Widgets@PySide6",
-    # requests 的 socks 支持（requests[socks]）：没它 socks5 代理直接抛 InvalidSchema
+    # requests 的 socks 支持（requests[socks]）：代理地址写 socks5:// 时要靠它，
+    # 没它直接抛 InvalidSchema
     "PySocks>=1.7.1",
 ]
 
 [dependency-groups]
-# fonttools/brotli 只给 scripts/convert_font.py 用（woff2 -> ttf），运行时不需要
-dev = ["ruff", "fonttools>=4.53", "brotli>=1.1"]
+dev = ["ruff"]
 
 [tool.uv]
 package = false

@@ -74,6 +74,9 @@ download_package_batch(ids, dest, *, gif=None, max_workers=None, on_progress=Non
 - **一个 `Downloader` + 一个总进度条**；准备阶段以 `on_progress(i, n, None)`（result 为 None）标记，`start_download` 据此显示「正在读取表情包详情…（i/n）」。
 - 文件名安全：目录 `dest / f"{清洗名[:60]} [{包ID}]"`（含包 ID 防同名覆盖、截断超长名），文件 `清洗名[:60] + ext`。
 
+> ⚠️ **代理部分（本节与第 6 节）已过时**：`ProxyEnvManager` 与环境变量兜底已删除，
+> 现在是「一个开关 + 一个地址框 + `trust_env=False`」。以 `proxy_diagnostics.md` 为准。
+
 ### 5. 下载设置（设置页「下载」卡）
 
 - **下载目录**：沿用 `cfg.download_dir`。

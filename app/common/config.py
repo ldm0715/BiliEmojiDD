@@ -1,10 +1,12 @@
 """全局配置：qconfig 持久化到 %APPDATA%/biliEmojiDD/config.json。"""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
 from qfluentwidgets import (
+    BoolValidator,
     ConfigItem,
     EnumSerializer,
     OptionsConfigItem,
@@ -21,6 +23,11 @@ APP_NAME = "biliEmojiDD"
 # 应用不是安装包，importlib.metadata 取不到版本
 APP_VERSION = "0.1.0"
 APP_CONFIG_DIR = Path(os.getenv("APPDATA", str(Path.home()))) / APP_NAME
+CONFIG_FILE = APP_CONFIG_DIR / "config.json"
+
+# 字体渲染后端（见 app/common/font.py::apply_font_engine）。
+# 只有这两项：Qt 6.4.2 的 Windows 插件不认 `fontengine=gdi`（实测输出与默认逐像素相同）。
+FONT_ENGINES = ("default", "freetype")
 
 
 class AppConfig(QConfig):
@@ -32,6 +39,8 @@ class AppConfig(QConfig):
     )
     default_gif = ConfigItem("Download", "gif", True)
     max_workers = RangeConfigItem("Download", "maxWorkers", 8, RangeValidator(1, 16))
+    # 代理总开关：关 = 彻底直连（应用也不读系统代理，见 app/common/net.py）
+    proxy_enabled = ConfigItem("Download", "proxyEnabled", False, BoolValidator())
     proxy = ConfigItem("Download", "proxy", "")
     # 磁盘缓存上限（MB）：图片字节 + 接口响应，超限按 LRU 淘汰
     cache_limit_mb = RangeConfigItem("Cache", "limitMB", 512, RangeValidator(64, 8192))
@@ -42,10 +51,31 @@ class AppConfig(QConfig):
         OptionsValidator(Theme),
         EnumSerializer(Theme),
     )
+    font_engine = OptionsConfigItem(
+        "Appearance", "fontEngine", "default", OptionsValidator(list(FONT_ENGINES))
+    )
 
 
 cfg = AppConfig()
-qconfig.load(str(APP_CONFIG_DIR / "config.json"), cfg)
+qconfig.load(str(CONFIG_FILE), cfg)
 # 同步 qfluentwidgets 主题模式到应用配置，避免配置文件里残留的
 # QFluentWidgets.ThemeMode 覆盖应用当前主题（导致亮暗反色）
 qconfig.set(qconfig.themeMode, cfg.theme.value, save=False)
+
+
+def _migrate_proxy_enabled() -> None:
+    """代理开关是后加的：老配置里填过代理地址的，视为「已启用」。
+
+    只认「配置文件里压根没有 proxyEnabled 这个键」这一种情况——用户自己关掉开关后
+    键就存在了，不能再被地址非空翻回来。文件缺失 / 损坏都静默跳过（走默认值 False）。
+    """
+    try:
+        raw = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        download = raw.get("Download", {})
+    except Exception:  # noqa: BLE001 首次运行没有文件；损坏也不该让应用起不来
+        return
+    if isinstance(download, dict) and "proxyEnabled" not in download and cfg.proxy.value:
+        qconfig.set(cfg.proxy_enabled, True)
+
+
+_migrate_proxy_enabled()

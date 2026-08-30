@@ -8,9 +8,13 @@ from PySide6.QtWidgets import QApplication
 from qfluentwidgets import setTheme
 
 from app.common.config import cfg
+from app.common.font import apply_font_engine
 
 
 def main() -> int:
+    # 字体渲染后端是平台插件的启动参数，必须赶在 QApplication 构造之前设
+    apply_font_engine()
+
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )

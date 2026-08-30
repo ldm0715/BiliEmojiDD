@@ -13,12 +13,9 @@ from typing import Any
 
 from biliemoji import (
     DownloadBatchResult,
-    Downloader,
     DownloadResult,
     DownloadStatus,
     DownloadTask,
-    Dress,
-    Emoji,
     ValidationError,
 )
 from biliemoji.sanitize import sanitize_filename
@@ -26,8 +23,8 @@ from qfluentwidgets import InfoBarPosition, PushButton
 
 from app.common.config import cfg
 from app.common.exception import show_bili_error
+from app.common.net import make_downloader, make_dress, make_emoji
 from app.common.notify import notify_error, notify_success, notify_warning
-from app.common.proxy import parse_proxy
 from app.components.download_queue import item_key, item_kind
 from app.components.dress_helpers import dlc_ids, is_collection
 from app.components.task import run_task
@@ -219,15 +216,14 @@ def download_package_batch(
     """批量下载多个表情包：单 Downloader + 单进度条 + 聚合结果。
 
     - max_workers 传入时使用传入值，仅 None 时读 cfg.max_workers.value。
-    - 显式 proxies（读取 cfg.proxy），元数据请求与文件下载都走代理。
+    - 联网对象全部经 app/common/net.py 建（显式代理 + 不读系统代理）。
     - 每个包先 certain_emoji_typed 取全量（准备阶段 on_progress(i, n, None)）；
       单个包失败（捕获 Exception，非 BaseException）合成 FAILED 结果后继续，
       不中断整批。
     - 目录名带包 ID（防同名覆盖）并对超长名截断，同时作为逐项结果的归属键。
     """
     max_workers = cfg.max_workers.value if max_workers is None else max_workers
-    proxies = parse_proxy(cfg.proxy.value)
-    emoji = Emoji(cookie=cfg.cookie.value, proxies=proxies)
+    emoji = make_emoji(cookie=cfg.cookie.value)
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
 
@@ -273,7 +269,7 @@ def download_package_batch(
                 )
             )
 
-    downloader = Downloader(max_workers=max_workers, on_progress=on_progress, proxies=proxies)
+    downloader = make_downloader(max_workers=max_workers, on_progress=on_progress)
     result = downloader.download_many(tasks)
     # 真实结果在前，取详情失败在后；空批次时 download_many 返回空结果
     all_results = result.results + tuple(meta_failures)
@@ -296,7 +292,7 @@ def download_collection_batch(
 
     - collections：DressCollectionSummary 列表。
     - max_workers 传入时使用传入值，仅 None 时读 cfg.max_workers.value。
-    - 显式 proxies（读取 cfg.proxy），元数据请求与文件下载都走代理
+    - 联网对象全部经 app/common/net.py 建（显式代理 + 不读系统代理）
       （biliemoji 的 download_collection 不转发代理给内部 Downloader）。
     - 每个收藏集先 certain_lottery_typed 取全量（准备阶段 on_progress(i, n, None)）；
       单个失败（捕获 Exception）合成 FAILED 结果后继续，不中断整批。
@@ -304,8 +300,7 @@ def download_collection_batch(
       图片 {名}.png、视频 {名}.mp4。
     """
     max_workers = cfg.max_workers.value if max_workers is None else max_workers
-    proxies = parse_proxy(cfg.proxy.value)
-    dress = Dress(cookie=cfg.cookie.value, proxies=proxies)
+    dress = make_dress(cookie=cfg.cookie.value)
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
 
@@ -370,7 +365,7 @@ def download_collection_batch(
                         )
                     )
 
-    downloader = Downloader(max_workers=max_workers, on_progress=on_progress, proxies=proxies)
+    downloader = make_downloader(max_workers=max_workers, on_progress=on_progress)
     result = downloader.download_many(tasks)
     per_item = _collect_outcomes(result.results, owners)
     per_item.update(meta_failed)

@@ -15,6 +15,12 @@ from PySide6.QtWidgets import QApplication
 
 app = QApplication(sys.argv)
 
+# 装上内置字体：offscreen 平台没有任何系统字体，不装的话中文全是豆腐块 □，
+# 截图看不出真实排版。时机与 main.py 一致——必须早于页面控件构造
+from app.common.font import apply_app_font
+
+apply_app_font(app)
+
 from qfluentwidgets import Theme, setTheme
 
 from app.components.content_meta import content_meta

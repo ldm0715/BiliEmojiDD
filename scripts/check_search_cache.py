@@ -292,8 +292,9 @@ class _FakeDress:
         return (DressCollectionSummary.from_dict(SUMMARY_RAW),)
 
 
-api_cache.Emoji = _FakeEmoji
-api_cache.Dress = _FakeDress
+# api_cache 走 app/common/net.py 的工厂建联网对象，所以打桩要打在工厂上
+api_cache.make_emoji = lambda **kwargs: _FakeEmoji()
+api_cache.make_dress = lambda **kwargs: _FakeDress()
 
 pkg1 = api_cache.emoji_package(53)
 pkg2 = api_cache.emoji_package(53)

@@ -24,7 +24,9 @@ app/
 ├── common/
 │   ├── config.py       AppConfig(QConfig) 单例，存 %APPDATA%/biliEmojiDD/config.json
 │   ├── signal_bus.py   全局信号（缩略图、配置变更）
-│   ├── proxy.py        代理解析 + HTTP(S)_PROXY 环境变量兜底管理
+│   ├── proxy.py        代理地址字符串工具（规范化 / 转 proxies 字典 / 打码）
+│   ├── net.py          联网对象工厂：显式代理 + trust_env=False（不读系统代理）
+│   ├── font.py         内置字体 + qfluentwidgets getFont 补丁 + 渲染后端切换
 │   ├── notify.py       统一消息提示（垂直布局 InfoBar）
 │   └── exception.py    show_bili_error：BiliError 子类 → 中文 InfoBar
 ├── components/

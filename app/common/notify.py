@@ -18,6 +18,12 @@ from qfluentwidgets import InfoBar, InfoBarPosition
 
 _DEFAULT_DURATION = 4000
 
+# 「不自动消失」是 **负数**，不是 0。上游 `InfoBar.showEvent`：
+#     if self.duration >= 0:
+#         QTimer.singleShot(self.duration, self.__fadeOut)
+# 所以 duration=0 会在下一轮事件循环立刻淡出——看起来就是「一闪而过」。
+NEVER_DISMISS = -1
+
 
 def _resolve_parent(widget):
     """把任意页面 widget 归一成「消息该挂的那个父级」。

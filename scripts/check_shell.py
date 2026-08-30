@@ -26,7 +26,13 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 app = QApplication(sys.argv)
 
-from app.common.font import apply_app_font, font_families
+from app.common.config import FONT_ENGINES, cfg
+from app.common.font import (
+    PREFERRED_FAMILY,
+    apply_app_font,
+    apply_font_engine,
+    font_families,
+)
 from app.common.resource import FONT_DIR, app_font_files
 
 FAILS: list[str] = []
@@ -66,6 +72,10 @@ check(
 family = apply_app_font(app)
 check(family is not None, f"字体加载成功（族名 {family!r}）")
 check(
+    family == PREFERRED_FAMILY,
+    f"用的是首选族 {PREFERRED_FAMILY!r} 而不是碰运气的文件名排序第一个（实际 {family!r}）",
+)
+check(
     app.font().families()[:1] == [family],
     f"应用默认字体首选内置字体（{app.font().families()}）",
 )
@@ -102,6 +112,55 @@ check(
     len(set(getFont(14).families())) == len(getFont(14).families()),
     "族名列表已去重（不重复堆上游那三个）",
 )
+
+print("== 2c. qss 里硬编码的字体族也换掉了（QSS 优先级高于 setFont） ==")
+# 上游 23 个 qss 写死 `font: 14px 'Segoe UI', 'Microsoft YaHei', 'PingFang SC'`，
+# QSS 赢过 setFont —— 只打 getFont 补丁的话，按钮/勾选框/InfoBar 全都退回 Segoe UI
+from qfluentwidgets import CheckBox, FluentStyleSheet, PushButton, Theme
+from qfluentwidgets.common.style_sheet import getStyleSheetFromFile
+
+check(
+    getattr(getStyleSheetFromFile, "__wrapped__", None) is not None,
+    "getStyleSheetFromFile 已被包一层（qss 编在 Qt 资源里，只能在读出来时替换）",
+)
+hardcoded = [
+    name
+    for name in ("BUTTON", "CHECK_BOX", "INFO_BAR", "EXPAND_SETTING_CARD", "SETTING_CARD")
+    if "'Segoe UI', 'Microsoft YaHei'" in getattr(FluentStyleSheet, name).content(Theme.LIGHT)
+]
+check(not hardcoded, f"关键 qss 里不再有硬编码的 Segoe UI 族名（残留 {hardcoded}）")
+check(
+    family in FluentStyleSheet.BUTTON.content(Theme.LIGHT),
+    "BUTTON qss 的 font 族名换成了内置字体",
+)
+for name, widget in (("PushButton", PushButton("按钮")), ("CheckBox", CheckBox("勾选框说明"))):
+    widget.ensurePolished()  # QSS 的字体要 polish 之后才落到 widget.font()
+    check(
+        widget.font().families()[:1] == [family],
+        f"{name} polish 后仍是内置字体（{widget.font().families()[:1]}）",
+    )
+
+print("== 2b. 字体渲染后端 ==")
+# QT_QPA_PLATFORM 已被本脚本设成 offscreen，apply_font_engine 必须让路，
+# 否则断言脚本会被拽回真实平台
+check(FONT_ENGINES == ("default", "freetype"), f"只给实测有效的两种后端（{FONT_ENGINES}）")
+before = os.environ.get("QT_QPA_PLATFORM")
+cfg.font_engine.value = "freetype"
+check(apply_font_engine() is None, "QT_QPA_PLATFORM 已被外部指定时不覆盖")
+check(os.environ.get("QT_QPA_PLATFORM") == before, f"平台字符串没被改（{os.environ.get('QT_QPA_PLATFORM')!r}）")
+os.environ.pop("QT_QPA_PLATFORM", None)
+cfg.font_engine.value = "default"
+check(apply_font_engine() is None, "default 不设任何平台参数")
+check("QT_QPA_PLATFORM" not in os.environ, "default 下环境干净")
+cfg.font_engine.value = "freetype"
+engine = apply_font_engine()
+check(
+    (engine == "freetype" and os.environ.get("QT_QPA_PLATFORM") == "windows:fontengine=freetype")
+    or sys.platform != "win32",
+    f"freetype 写出平台参数（{os.environ.get('QT_QPA_PLATFORM')!r}）",
+)
+os.environ["QT_QPA_PLATFORM"] = before or "offscreen"
+cfg.font_engine.value = "default"
 
 print("== 3. 消息提示挂在内容区 ==")
 from app.common.notify import _resolve_parent, notify_info, notify_success

@@ -19,6 +19,9 @@
 2. 槽函数引用的控件**属性名与类型全部保留**（`cookieEdit` / `saveBtn` / `verifyBtn` / `dirEdit` /
    `browseBtn` / `openDirBtn` / `protoCombo` / `hostEdit` / `portSpin` / `threadSpin` /
    `downloadSaveBtn` / `themeCombo`）；
+   > 后续代理改版把 `protoCombo` / `hostEdit` / `portSpin` 换成了
+   > `proxySwitch` + `proxyEdit`，另加了 `fontEngineCombo`，见 `proxy_diagnostics.md`
+   > 与 `app_shell.md`；本节记的是改版当时的状态。
 3. `SettingPage` **仍是 `QWidget`**（没改成 `ScrollArea` 子类）——槽里 `notify_*(parent=self, ...)`
    的 InfoBar 定位行为保持不变。
 
@@ -59,13 +62,14 @@ SettingPage(QWidget)
 | 账号 | 访问权限 | `_WidgetSettingCard` | `verifyBtn`「验证」 |
 | 账号 | 配置文件 | `SettingCard` | 无（副标题就是 config.json 路径） |
 | 下载 | 下载目录 | `ExpandGroupSettingCard` | 标题行：`browseBtn`「选择文件夹」+ `openDirBtn`「打开下载文件夹」；展开区：`dirEdit` |
-| 下载 | 代理 | `_WidgetSettingCard` | `protoCombo` + `hostEdit` + `portSpin` |
+| 下载 | 代理 | `_WidgetSettingCard` | `proxySwitch` + `proxyEdit` + `proxyTestBtn`（后改，原为协议下拉 + 主机 + 端口，见 `proxy_diagnostics.md`） |
 | 下载 | 下载线程数 | `_WidgetSettingCard` | `threadSpin` |
 | 下载 | 保存下载设置 | `_WidgetSettingCard` | `downloadSaveBtn`「保存」 |
 | 外观 | 应用主题 | `_WidgetSettingCard` | `themeCombo` |
+| 外观 | 字体渲染 | `_WidgetSettingCard` | `fontEngineCombo`（后加，见 `app_shell.md`） |
 
 图标：Cookie=`VPN`、访问权限=`CERTIFICATE`、配置文件=`DOCUMENT`、下载目录=`DOWNLOAD`、
-代理=`GLOBE`、线程=`SPEED_HIGH`、保存=`SAVE`、主题=`BRUSH`。
+代理=`GLOBE`、线程=`SPEED_HIGH`、保存=`SAVE`、主题=`BRUSH`、字体渲染=`FONT`。
 
 ### 3. 两个本地 helper
 
@@ -93,6 +97,13 @@ SettingPage(QWidget)
 `protoCombo` 105 / `hostEdit` 150 / `portSpin` 130 / `threadSpin` 110 / `themeCombo` ≥140；
 代理副标题精简为「留空不使用代理」，原来那句长提示（socks / 端口范围）挪到卡片 `setToolTip`。
 `check_setting_page.py` 在 600px 宽下断言「控件右边缘 ≤ 卡片宽」且「副标题与右侧控件不重叠」。
+
+> **这套「每个控件定死宽度」的做法后来被推翻了**：代理行换成单地址框后，固定宽度在
+> 600px 视口下会把整行顶出卡片。根因是 `_WidgetSettingCard` 用
+> `addWidget(w, 0, Qt.AlignRight)` 挂控件，**带对齐标志的布局项拿 sizeHint 宽度、
+> 不会被压缩**。现在横向 `Expanding` 的控件改按 stretch 加（`addWidget(w, 1)`），
+> 只给 min/max 不给固定值。详见 `proxy_diagnostics.md`「布局上的一个坑」。
+> 当时的断言量的是 `portSpin`（四个控件里的第三个）而不是最右边的按钮，所以没发现。
 
 ## 四、踩坑记录
 
@@ -132,8 +143,9 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py      # 出�
 
 `check_setting_page.py` 覆盖 7 组：
 
-1. 12 个功能控件仍在、类型未变、取值正常（`openDirBtn` 文案、`protoCombo.currentData()`、
-   `themeCombo.count()==3` 等）；
+1. 功能控件仍在、类型未变、取值正常（`openDirBtn` 文案、`themeCombo.count()==3` 等；
+   代理那几个控件名在后续改版中变了，断言已同步）；
+1b. 「测试」按钮的加载环：转圈时按钮宽度不跳、环落在按钮内且不压文字、复原后文案还原；
 2. 三个分组 + 每组卡片数 3/4/1 + 大标题 / 分组标题 / 卡片左对齐（36/36/36）；
 3. `dirEdit` 改路径 → 下载目录卡副标题同步；
 4. Cookie / 下载目录卡展开到位（70 → 148）并能收起复原；未配置 Cookie 时默认展开；

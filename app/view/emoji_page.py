@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import math
 
-from biliemoji import Emoji
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -29,8 +28,8 @@ from qfluentwidgets import (
 
 from app.common.config import cfg
 from app.common.exception import show_bili_error
+from app.common.net import make_emoji
 from app.common.notify import notify_info, notify_success, notify_warning
-from app.common.proxy import parse_proxy
 from app.common.theme import SECONDARY_TEXT
 from app.components import api_cache
 from app.components.cache import load_all_packages_cache, save_all_packages_cache
@@ -279,9 +278,7 @@ class _AllPackagesTab(QWidget):
         self.refreshBtn.setEnabled(False)
 
         def task():
-            return Emoji(
-                cookie=cookie, proxies=parse_proxy(cfg.proxy.value)
-            ).all_packages()
+            return make_emoji(cookie=cookie).all_packages()
 
         run_task(
             task,

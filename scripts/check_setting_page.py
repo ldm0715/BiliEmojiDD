@@ -28,7 +28,6 @@ app = QApplication(sys.argv)
 # 注意：必须等 app 模块导入完成后再 setTheme——config 导入会 qconfig.load 读取
 # 配置文件里的 QFluentWidgets.ThemeMode（可能残留旧值），覆盖之前设置的主题
 from qfluentwidgets import (
-    ComboBox,
     ExpandSettingCard,
     LineEdit,
     SettingCard,
@@ -38,7 +37,6 @@ from qfluentwidgets import (
     setTheme,
 )
 
-from app.common.proxy import PROXY_SCHEMES
 from app.view.setting_page import SettingPage
 
 setTheme(Theme.LIGHT)
@@ -92,33 +90,58 @@ NAMES = [
     "dirEdit",
     "browseBtn",
     "openDirBtn",
-    "protoCombo",
-    "hostEdit",
-    "portSpin",
+    "proxySwitch",
+    "proxyEdit",
     "threadSpin",
     "downloadSaveBtn",
     "themeCombo",
+    "fontEngineCombo",
 ]
 missing = [n for n in NAMES if not hasattr(page, n)]
-check(not missing, f"12 个功能控件齐全（缺失 {missing}）")
+check(not missing, f"{len(NAMES)} 个功能控件齐全（缺失 {missing}）")
 check(isinstance(page.dirEdit, LineEdit), "dirEdit 仍是 LineEdit（_on_browse 读写 text）")
-check(isinstance(page.protoCombo, ComboBox), "protoCombo 仍是组件库 ComboBox")
-check(isinstance(page.portSpin, SpinBox) and isinstance(page.threadSpin, SpinBox), "端口 / 线程数仍是 SpinBox")
+check(isinstance(page.proxyEdit, LineEdit), "proxyEdit 是 LineEdit（_current_proxy 读 text）")
+check(isinstance(page.threadSpin, SpinBox), "线程数仍是 SpinBox")
 check(
     page.openDirBtn.text() == "打开下载文件夹",
     f"「打开下载文件夹」文案未变（实际 {page.openDirBtn.text()!r}）",
 )
 check(
-    page.protoCombo.currentData() in PROXY_SCHEMES,
-    f"protoCombo.currentData() 有值（实际 {page.protoCombo.currentData()!r}）",
+    page.proxyEdit.isEnabled() == page.proxySwitch.isChecked(),
+    "地址框可编辑性跟随代理开关",
 )
 check(
-    page.protoCombo.count() == len(PROXY_SCHEMES),
-    f"代理协议 {len(PROXY_SCHEMES)} 项（实际 {page.protoCombo.count()}）",
+    page.fontEngineCombo.currentData() in ("default", "freetype"),
+    f"字体渲染下拉 currentData 有值（实际 {page.fontEngineCombo.currentData()!r}）",
 )
 check(page.themeCombo.count() == 3, f"主题下拉三项（实际 {page.themeCombo.count()}）")
-check(page.portSpin.value() > 0, f"端口有默认值（实际 {page.portSpin.value()}）")
 check(1 <= page.threadSpin.value() <= 16, f"线程数在 1–16（实际 {page.threadSpin.value()}）")
+
+print("== 1b. 「测试」按钮的加载环：转圈时不跳宽、环不压文字 ==")
+btn = page.proxyTestBtn
+page.proxySwitch.setChecked(True)
+settle()
+idle_w, idle_text = btn.width(), btn.text()
+check(not btn.is_busy(), "初始不是忙碌态")
+btn.set_busy(True)
+settle()
+ring = btn._ring
+check(btn.is_busy() and not ring.isHidden(), "忙碌时加载环出现")
+check(btn.width() == idle_w, f"按钮宽度不跳（空闲 {idle_w} / 忙碌 {btn.width()}）")
+check(btn.rect().contains(ring.geometry()), f"环落在按钮内（{ring.geometry().getRect()}）")
+check(not btn.isEnabled(), "忙碌时禁用，防重复点")
+# 环右边缘与文字起点之间要有空隙——空格数按空格实际宽度算，写死会随字体压到文字上
+fm = btn.fontMetrics()
+prefix_w = fm.horizontalAdvance(btn.text()) - fm.horizontalAdvance(btn.text().lstrip())
+text_left = max(6, (btn.width() - fm.horizontalAdvance(btn.text())) // 2) + prefix_w
+gap = text_left - (ring.x() + ring.width())
+check(gap > 0, f"环与文字不重合（间距 {gap}px）")
+btn.set_busy(False)
+settle()
+check(
+    not btn.is_busy() and ring.isHidden() and btn.text() == idle_text,
+    f"复原：环收起、文案回到 {idle_text!r}（实际 {btn.text()!r}）",
+)
 
 print("== 2. 版式结构：四个分组 + 每组卡片数 ==")
 groups = [w for w in page.scrollWidget.children() if isinstance(w, SettingCardGroup)]
@@ -141,7 +164,7 @@ group_x = groups[0].titleLabel.mapTo(page, groups[0].titleLabel.rect().topLeft()
 card_x = _cards_of(groups[0])[0].mapTo(page, page.rect().topLeft()).x()
 check(group_x == card_x, f"分组标题 / 卡片左对齐（{group_x} / {card_x}）")
 counts = [len(_cards_of(g)) for g in groups]
-check(counts == [3, 5, 2, 1], f"每组卡片数 3/5/2/1（实际 {counts}）")
+check(counts == [3, 4, 2, 2], f"每组卡片数 3/4/2/2（实际 {counts}）")
 
 print("== 3. 下载目录副标题跟随 dirEdit ==")
 page.dirEdit.setText("X:/tmp/biliemoji")
@@ -185,7 +208,7 @@ print("== 5. 窄窗口下右侧控件不被裁（最小窗口 820 - 侧栏 150 -
 page.resize(600, 760)
 settle(8)
 for name, card, widget in (
-    ("代理-端口", page.proxyCard, page.portSpin),
+    ("代理-地址", page.proxyCard, page.proxyEdit),
     ("线程数", page.threadCard, page.threadSpin),
     ("保存下载设置", page.saveDownloadCard, page.downloadSaveBtn),
     ("主题", page.themeCard, page.themeCombo),
@@ -202,7 +225,7 @@ check(
 )
 # 右边缘不越界还不够：文字列的最小宽度会把控件顶出去，两者可能重叠
 for name, card, label, widget in (
-    ("代理", page.proxyCard, page.proxyCard.contentLabel, page.protoCombo),
+    ("代理", page.proxyCard, page.proxyCard.contentLabel, page.proxyEdit),
     ("线程数", page.threadCard, page.threadCard.contentLabel, page.threadSpin),
     ("主题", page.themeCard, page.themeCard.contentLabel, page.themeCombo),
 ):

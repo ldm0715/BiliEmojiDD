@@ -11,12 +11,11 @@ worker 直接向常驻的 signal_bus 发射原始信号（thumbRawLoaded/thumbRa
 """
 from __future__ import annotations
 
-from biliemoji import BiliClient
 from PySide6.QtCore import QObject, QRunnable, QThreadPool
 from PySide6.QtGui import QImage, QPixmap, QPixmapCache
 
 from app.common.config import cfg
-from app.common.proxy import parse_proxy
+from app.common.net import current_proxies, make_client
 from app.common.signal_bus import signal_bus
 from app.components.disk_cache import image_cache
 
@@ -40,8 +39,8 @@ class ThumbLoadTask(QRunnable):
         try:
             data = image_cache.get(self._url)
             if data is None:
-                # proxies 显式传给 BiliClient，与其余联网入口一致
-                client = BiliClient(cookie=self._cookie, proxies=self._proxies)
+                # 工厂保证显式代理 + 不读系统代理，与其余联网入口一致
+                client = make_client(cookie=self._cookie, proxies=self._proxies)
                 data = client.get_bytes(self._url, timeout=15)
                 image_cache.put(self._url, data)
             img = QImage()
@@ -83,7 +82,7 @@ class ThumbManager(QObject):
         self._inflight.add(url)
         # cookie / proxies 都在主线程读一次再交给 worker（worker 不碰 cfg）
         self._pool.start(
-            ThumbLoadTask(url, cfg.cookie.value, parse_proxy(cfg.proxy.value))
+            ThumbLoadTask(url, cfg.cookie.value, current_proxies())
         )
 
     def _on_raw_loaded(self, url: str, image: QImage) -> None:

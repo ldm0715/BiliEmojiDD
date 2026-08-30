@@ -1,26 +1,22 @@
-# 应用外壳：全局字体 / 消息提示位置 / 切页无动画
+# 应用外壳：全局字体 / 字体渲染 / 消息提示位置 / 切页无动画
 
-三件跨页面的「壳」层改动，都不属于任何单个功能页。
+四件跨页面的「壳」层改动，都不属于任何单个功能页。
 
 ---
 
-## 一、全局字体 AlibabaPuHuiTi
+## 一、全局字体 LXGW 文楷等宽 GB
 
-### woff2 加载不了
+### 目录里放什么、用哪个
 
-`static/font/` 里原本只有 `AlibabaPuHuiTi-3-55-Regular.woff2`。
+`static/font/` 下只有 `LXGWWenKaiMonoGB-Regular.ttf`（族名 **`LXGW WenKai Mono GB`**）。
 **Qt 的 `QFontDatabase.addApplicationFont()` 只认 TrueType / TrueType Collection /
-OpenType**，woff / woff2 一律返回 -1。
+OpenType**，woff / woff2 一律返回 -1——想用只在 Web 包里发 woff2 的字体（阿里普惠体就是
+这样），得先离线解成 ttf 再入库。
 
-解法是离线转一次：`scripts/convert_font.py` 用
-`fontTools.ttLib.woff2.decompress` 把目录下每个 `.woff2` 解成同名 `.ttf`
-（5.2 MB → 7.1 MB），产物入库，运行时零依赖。`fonttools` / `brotli` 只在 dev 组里。
-
-```bash
-uv run python scripts/convert_font.py --dry-run   # 先看要生成什么
-uv run python scripts/convert_font.py             # 真的写
-uv run python scripts/convert_font.py --force     # 覆盖已有 ttf
-```
+`load_app_fonts()` 把目录下所有字体都注册进去，然后**优先返回 `PREFERRED_FAMILY`**
+（`app/common/font.py` 里的常量，就是上面那个族名），目录里没有它才退回第一个成功加载的。
+这样「用哪个字体」是代码里的显式事实，而不是文件名排序的副产品——以前目录里同时躺着
+阿里普惠体和文楷时，生效的是排序靠前的阿里普惠体，看起来像是新字体没装上。
 
 ### 光 `QApplication.setFont` 改不动 qfluentwidgets
 
@@ -42,6 +38,37 @@ font.setFamilies(['Segoe UI', 'Microsoft YaHei', 'PingFang SC'])
 
 `setFont` **不用重绑**：它的函数体在自己模块的 globals 里查 `getFont`，天然吃到补丁。
 
+### 光打 `getFont` 补丁还不够：QSS 赢过 `setFont`
+
+改完 `getFont` 之后仍然有一半控件是 Segoe UI——按钮、勾选框、InfoBar、设置卡，
+而输入框和下拉却是对的。根因是**上游 23 个 QSS 把字体族写死了**：
+
+```css
+/* BUTTON / CHECK_BOX / INFO_BAR / EXPAND_SETTING_CARD / DIALOG ... */
+font: 14px 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';
+```
+
+**QSS 的优先级高于 `QWidget.setFont()`**，`QStyleSheetStyle` 在 polish 时会用 QSS 里的
+族名重算控件字体，把 `getFont` 补丁的结果整个盖掉。`LINE_EDIT` / `COMBO_BOX` 里那两行
+恰好是**注释掉**的（`/* font: ... */`），所以输入框和下拉一直正常——这个「有的对有的不对」
+正是判断依据。
+
+这些 qss **编在 Qt 资源里**（`:/qfluentwidgets/qss/...`），磁盘上 `grep` 不到，
+只能在读出来的那一刻替换。所有库内 qss 都经 `getStyleSheetFromFile` 出口，
+`_patch_stylesheet_font()` 包一层，用正则把那串族名换成内置字体：
+
+```python
+_QSS_FAMILIES_RE = re.compile(
+    r'''['"]Segoe UI['"]\s*,\s*['"]Microsoft YaHei['"]'''
+    r'''(?:\s*,\s*['"]PingFang SC['"])?'''
+)
+```
+
+单双引号都出现过、`PingFang SC` 有时没有，所以两处都写成可选。库内没有别的模块直接
+import 这个函数，不用像 `getFont` 那样扫 `sys.modules` 重绑。回归断言在
+`scripts/check_shell.py` 第 2c 节：关键 qss 里不再有硬编码族名，且 `PushButton` /
+`CheckBox` **`ensurePolished()` 之后**仍是内置字体（不 polish 量不出这个 bug）。
+
 ### 调用时机
 
 `main.py` 里 `QApplication` 建好之后、`import app.MainWindow` **之前**调
@@ -54,7 +81,7 @@ font.setFamilies(['Segoe UI', 'Microsoft YaHei', 'PingFang SC'])
 ### 字重
 
 只装了 Regular，`TitleLabel` / `StrongBodyLabel` 要的 DemiBold / Bold 由 Qt 合成
-伪粗体。想要真字重，把 `AlibabaPuHuiTi-3-85-Bold.ttf` 之类丢进 `static/font/`
+伪粗体。想要真字重，把 `LXGWWenKaiMonoGB-Medium.ttf` 之类丢进 `static/font/`
 即可——`app_font_files()` 扫整个目录，同族不同字重 Qt 会自己挑，**无需改代码**。
 
 字体缺失 / 加载失败一律静默返回 `None`，不影响启动（与 `resource.py`
@@ -62,7 +89,42 @@ font.setFamilies(['Segoe UI', 'Microsoft YaHei', 'PingFang SC'])
 
 ---
 
-## 二、消息提示统一落在内容区右上角
+## 二、字体渲染后端（DirectWrite / FreeType）
+
+Qt 在 Windows 上默认用 DirectWrite 光栅化。文楷这类手写风字体笔画细、又不带 TT hinting
+指令，14px 下容易显得发糊，ClearType 的次像素抗锯齿还会在细笔画上留彩边（看起来就是
+「颗粒感」）。换 FreeType 渲染通常笔画更实、没有彩边。
+
+切换只能靠**平台插件启动参数**，且必须在 `QApplication` 构造之前设：
+
+```python
+os.environ["QT_QPA_PLATFORM"] = "windows:fontengine=freetype"
+```
+
+所以 `main.py` 的第一句是 `apply_font_engine()`（读 `cfg.font_engine`），
+之后才 `QApplication(sys.argv)`。设置页「外观 → 字体渲染」改的就是这个配置项，
+**重启应用后生效**。`QT_QPA_PLATFORM` 已被外部指定时（屏幕外脚本的 `offscreen`）
+直接让路，不覆盖。
+
+配套还给应用字体和补丁后的 `getFont` 都设了
+`QFont.HintingPreference.PreferFullHinting`——DirectWrite 会忽略它，FreeType 下它决定
+字形是否对齐像素网格。
+
+**实测（PySide6 6.4.2，Windows）**：把同一段文字画进 QImage 比 md5，
+
+| `QT_QPA_PLATFORM` | 结果 |
+|---|---|
+| 未设（DirectWrite） | `b38eda02…` |
+| `windows:fontengine=freetype` | `932e03b3…`（**不同** → 引擎真的换了） |
+| `windows:fontengine=gdi` | `b38eda02…`（与默认一致 → **不支持**） |
+| `windows:fontengine=bogus` | `b38eda02…`（乱写也不报错，Qt 静默忽略） |
+
+**Qt 对不认识的 `fontengine` 值不报警告**，只能靠比对渲染结果判断有没有生效。
+所以 `FONT_ENGINES` 只给 `("default", "freetype")` 两项，没有 GDI。
+
+---
+
+## 三、消息提示统一落在内容区右上角
 
 改动前各页面各传各的 parent（`self` / `self.searchPage` / `self.detailPage`），
 而上游 `InfoBarManager` 是按 `infoBar.parent()` 的矩形算位置的
@@ -82,7 +144,7 @@ font.setFamilies(['Segoe UI', 'Microsoft YaHei', 'PingFang SC'])
 
 ---
 
-## 三、切页不做位移动画
+## 四、切页不做位移动画
 
 上游 `PopUpAniStackedWidget.setCurrentIndex` 每次切页跑 **300 ms 的整页 `pos`
 动画**（`deltaY=76`），这 300 ms 里整页被重绘十几帧。实测单帧重绘成本
@@ -124,7 +186,9 @@ font.setFamilies(['Segoe UI', 'Microsoft YaHei', 'PingFang SC'])
 
 ## 回归断言
 
-`scripts/check_shell.py`（`QT_QPA_PLATFORM=offscreen`）覆盖三件事：
-字体加载 + `getFont` 补丁生效（含 `label.py` 的重绑）、InfoBar 挂在
-`stackedWidget` 且位置在内容区右上角 / 切页后仍可见、切页一轮事件循环内到位
-且无残留动画。
+`scripts/check_shell.py`（`QT_QPA_PLATFORM=offscreen`）覆盖五件事：
+字体加载（含「首选族名而不是文件名排序第一个」）、`getFont` 补丁生效（含 `label.py`
+的重绑）、**qss 里硬编码的字体族也被替换**（`PushButton`/`CheckBox` polish 后仍是内置字体）、
+`apply_font_engine()` 的三种取值与「不覆盖外部 `QT_QPA_PLATFORM`」、
+InfoBar 挂在 `stackedWidget` 且位置在内容区右上角 / 切页后仍可见、
+切页一轮事件循环内到位且无残留动画。

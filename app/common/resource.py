@@ -20,7 +20,7 @@ PYSIDE_LOGO_PATH = STATIC_DIR / "qtforpython.png"
 SHOWCASE_DIR = STATIC_DIR / "showcase"
 SHOWCASE_MANIFEST = SHOWCASE_DIR / "manifest.json"
 SHOWCASE_KINDS = ("emoji", "collection")
-# 应用内置字体：只认 Qt 支持的三种容器格式（woff/woff2 加载必失败，见 scripts/convert_font.py）
+# 应用内置字体：Qt 的 addApplicationFont 只认这三种容器格式，woff / woff2 一律加载失败
 FONT_DIR = STATIC_DIR / "font"
 FONT_SUFFIXES = (".ttf", ".otf", ".ttc")
 

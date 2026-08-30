@@ -21,7 +21,7 @@ B 站表情包 / 收藏集（装扮）下载器 GUI，基于 PySide6 + QFluentWi
 - **图片查看器**：两个详情页均可点图全屏查看，左右箭头 / 方向键 / 滚轮翻页
 - **下载队列**：会话级队列，混合表情包 + 收藏集，全选 / 删除 / 清空 / 批量下载
 - **缓存**：缩略图与接口响应落盘复用，重启后仍命中；容量上限可在设置页调整并随时清除
-- **设置**：B 站 Cookie、下载目录、代理、下载线程数、缓存上限、主题（浅色 / 深色 / 跟随系统）
+- **设置**：B 站 Cookie、下载目录、代理（开关 + 地址）、下载线程数、缓存上限、主题（浅色 / 深色 / 跟随系统）、字体渲染
 
 ## 运行
 
@@ -46,8 +46,8 @@ uv run python main.py
 - [收藏集视频预览](docs/collection_video.md) — 内容分页 Pivot、内嵌播放器 + 缩略图选择条、临时缓存与黑背景坑
 - [搜索历史 + 磁盘缓存 + 应用标识](docs/search_and_cache.md) — 浮层历史面板、图片/接口落盘缓存与容量设置、窗口图标与版本号
 - [主页（欢迎页）](docs/home_page.md) — 英雄卡 + 功能入口卡 + 快速上手 / 关于 / 最近搜索、静态展示图方案、性能与布局坑
-- [代理](docs/proxy_diagnostics.md) — 只走 `proxies=` 参数、代理认证与 SOCKS、ProxyError 成因表与「测试」按钮
-- [应用外壳](docs/app_shell.md) — 全局字体（woff2 → ttf、qfluentwidgets `getFont` 补丁）、消息提示统一挂内容区、切页去掉位移动画
+- [代理](docs/proxy_diagnostics.md) — 开关 + 单地址框、`trust_env=False` 断开系统代理、`net.py` 联网工厂、ProxyError 成因表与「测试」按钮
+- [应用外壳](docs/app_shell.md) — 全局字体 LXGW 文楷等宽、FreeType 渲染后端、消息提示统一挂内容区、切页去掉位移动画
 
 ## Cookie
 
