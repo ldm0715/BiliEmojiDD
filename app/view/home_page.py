@@ -69,6 +69,7 @@ from app.components.page_scaffold import (
     SectionCard,
     page_title,
     title_row,
+    version_badge,
 )
 from app.components.search_history import SearchHistory
 from app.components.thumb import thumb_manager
@@ -286,8 +287,7 @@ class _HeroCard(SimpleCardWidget):
         name_row = QHBoxLayout()
         name_row.setSpacing(8)
         self.titleLabel = TitleLabel("BiliEmojiDD", self)
-        self.versionLabel = CaptionLabel(f"v{APP_VERSION}", self)
-        self.versionLabel.setTextColor(*SECONDARY_TEXT)
+        self.versionLabel = version_badge(APP_VERSION, self)
         name_row.addWidget(self.titleLabel, 0, Qt.AlignmentFlag.AlignVCenter)
         name_row.addWidget(self.versionLabel, 0, Qt.AlignmentFlag.AlignBottom)
         name_row.addStretch(1)
@@ -416,9 +416,16 @@ class _AboutCard(SectionCard):
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(8)
 
-        self.versionLabel = StrongBodyLabel(f"BiliEmojiDD v{APP_VERSION}", holder)
-        self.versionLabel.setWordWrap(True)
-        box.addWidget(self.versionLabel)
+        # 应用名 + 版本胶囊（与英雄卡 / 设置页身份行同一套组件）
+        name_row = QHBoxLayout()
+        name_row.setContentsMargins(0, 0, 0, 0)
+        name_row.setSpacing(8)
+        self.nameLabel = StrongBodyLabel("BiliEmojiDD", holder)
+        self.versionLabel = version_badge(APP_VERSION, holder)
+        name_row.addWidget(self.nameLabel, 0, Qt.AlignmentFlag.AlignVCenter)
+        name_row.addWidget(self.versionLabel, 0, Qt.AlignmentFlag.AlignVCenter)
+        name_row.addStretch(1)
+        box.addLayout(name_row)
 
         self.stackLabel = CaptionLabel(f"biliemoji {_sdk_version()} 提供接口能力", holder)
         self.stackLabel.setTextColor(*SECONDARY_TEXT)

@@ -36,6 +36,10 @@ def check(cond: bool, msg: str) -> None:
 
 
 print("== 1. 侧栏主题按钮：点一次切一次 ==")
+from app.components import updater
+
+updater.set_enabled(False)  # MainWindow 启动后会静默查一次新版本
+
 from app.MainWindow import MainWindow
 
 win = MainWindow()

@@ -17,13 +17,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from qfluentwidgets import (
-    CaptionLabel,
     ComboBox,
     ExpandGroupSettingCard,
     ExpandLayout,
     FluentIcon,
+    HyperlinkButton,
     IconWidget,
-    IndeterminateProgressRing,
     InfoBarPosition,
     LineEdit,
     PasswordLineEdit,
@@ -42,23 +41,36 @@ from qfluentwidgets import (
     setTheme,
 )
 
-from app.common.config import APP_CONFIG_DIR, APP_VERSION, cfg
+from app.common.config import (
+    APP_CONFIG_DIR,
+    APP_VERSION,
+    LICENSE_URL,
+    REPO_SLUG,
+    REPO_URL,
+    cfg,
+)
 from app.common.exception import cause_hint, show_bili_error
 from app.common.net import make_emoji
 from app.common.notify import (
     NEVER_DISMISS,
     notify_error,
+    notify_info,
     notify_success,
     notify_warning,
 )
 from app.common.proxy import PROXY_PLACEHOLDER, normalize_proxy, redact_proxy
 from app.common.resource import app_icon
 from app.common.signal_bus import signal_bus
-from app.common.theme import SECONDARY_TEXT, bind_theme
+from app.common.theme import bind_theme
+from app.common.version import is_newer
 from app.components.disk_cache import MB, clear_all, total_size
 from app.components.download_runner import open_in_explorer
+from app.components.mirror_card import MirrorSettingCard
+from app.components.page_scaffold import BusyPushButton, version_badge
 from app.components.proxy_probe import PROBE_NAME, PROBE_URL, probe_proxy
 from app.components.task import run_task
+from app.components.update_dialog import show_update_dialog
+from app.components.updater import NoRelease, fetch_latest_release
 
 _THEMES = [Theme.AUTO, Theme.LIGHT, Theme.DARK]
 # 字体渲染后端下拉：文案 -> cfg.font_engine 的取值
@@ -67,77 +79,6 @@ _FONT_ENGINES = [("默认 (DirectWrite)", "default"), ("FreeType", "freetype")]
 _PAGE_MARGIN = 36  # 分组左右留白（与大标题对齐）
 _LOGO_SIZE = 64  # 顶部应用图标边长
 _ROW_H = 60  # 展开区每行高度（addGroupWidget 靠固定高算展开高度）
-_RING_SIZE = 14  # 按钮内加载环直径
-_RING_GAP = 10  # 加载环与文字之间的空隙
-_BTN_PAD = 28  # 按钮左右内边距估值，用于预留忙碌态宽度
-
-
-class _BusyPushButton(PushButton):
-    """带加载环的按钮：忙碌时文字前面转圈，明示「正在跑」。
-
-    组件库没有 loading 态按钮，这里自己拼：`IndeterminateProgressRing` 当子控件，
-    忙碌时给文字前面塞若干空格腾位置，再把环挪到文字左边（按钮文字是居中画的，
-    所以位置得按 `fontMetrics` 现算）。**空格数按空格实际宽度算而不是写死**——
-    换字体空格宽度就变（Segoe UI 7px / LXGW 等宽 10px），写死会导致环压在文字上。
-
-    **不覆写 `__init__`**：`PushButton.__init__` 是库自实现的 `singledispatchmethod`，
-    `(text, parent)` 那个重载内部会**再调一次** `self.__init__(parent=parent)`，
-    子类若加必填位置参数会直接 TypeError。初始化一律走库留的 `_postInit()` 钩子
-    ——注意它在 `setText` 之前执行，所以空闲文案只能等 `reserve_busy()` 时再记。
-    """
-
-    def _postInit(self) -> None:
-        self._ring = IndeterminateProgressRing(self, start=False)
-        self._ring.setFixedSize(_RING_SIZE, _RING_SIZE)
-        self._ring.setStrokeWidth(3)
-        # 点击穿透：环盖在按钮上，不能吃掉点击
-        self._ring.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self._ring.hide()
-        self._idle_text = ""
-        self._busy_text = ""
-
-    def _busy_prefix(self) -> str:
-        """够放下加载环 + 空隙的空格数（向上取整）。"""
-        space = max(1, self.fontMetrics().horizontalAdvance(" "))
-        return " " * -(-(_RING_SIZE + _RING_GAP) // space)
-
-    def reserve_busy(self, busy_text: str) -> None:
-        """按忙碌态的文字把宽度定死——否则一转圈按钮就变宽，整行跟着跳。"""
-        self._idle_text = self.text()
-        self._busy_text = busy_text
-        width = self.fontMetrics().horizontalAdvance(
-            self._busy_prefix() + busy_text
-        ) + _BTN_PAD
-        self.setFixedWidth(max(self.sizeHint().width(), width))
-
-    def set_busy(self, busy: bool) -> None:
-        if busy:
-            self.setText(self._busy_prefix() + (self._busy_text or self._idle_text))
-            self._ring.show()
-            self._ring.start()
-        else:
-            self._ring.stop()
-            self._ring.hide()
-            if self._idle_text:
-                self.setText(self._idle_text)
-        self.setEnabled(not busy)
-        self._place_ring()
-
-    def is_busy(self) -> bool:
-        return not self._ring.isHidden()
-
-    def _place_ring(self) -> None:
-        # 判据用 isHidden 而非 isVisible：按钮尚未 show() 时子控件 isVisible() 恒为 False
-        if self._ring.isHidden():
-            return
-        text_w = self.fontMetrics().horizontalAdvance(self.text())
-        left = max(6, (self.width() - text_w) // 2)
-        self._ring.move(left, (self.height() - _RING_SIZE) // 2)
-        self._ring.raise_()
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._place_ring()
 
 
 class _WidgetSettingCard(SettingCard):
@@ -207,12 +148,11 @@ class SettingPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # 顶部身份区：整体居中，第一行大图标，第二行「应用名 + 版本号」
+        # 顶部身份区：整体居中，第一行大图标，第二行「应用名 + 版本胶囊」
         self.titleLabel = TitleLabel("BiliEmojiDD", self)
         self.logoIcon = IconWidget(app_icon(), self)
         self.logoIcon.setFixedSize(_LOGO_SIZE, _LOGO_SIZE)
-        self.versionLabel = CaptionLabel(f"v{APP_VERSION}", self)
-        self.versionLabel.setTextColor(*SECONDARY_TEXT)
+        self.versionLabel = version_badge(APP_VERSION, self)
         # 缩进/留白走布局边距，不用 setContentsMargins：Label 套了组件库 QSS，
         # QStyleSheetStyle 会用 QSS 盒模型重算 contentsMargins，手动设的被忽略
         header_box = QVBoxLayout()
@@ -226,7 +166,7 @@ class SettingPage(QWidget):
         name_row.setSpacing(8)
         name_row.addStretch(1)
         name_row.addWidget(self.titleLabel, 0, Qt.AlignmentFlag.AlignVCenter)
-        # 版本号贴着应用名底部排
+        # 版本胶囊贴着应用名底部排
         name_row.addWidget(self.versionLabel, 0, Qt.AlignmentFlag.AlignBottom)
         name_row.addStretch(1)
         header_box.addLayout(name_row)
@@ -252,10 +192,132 @@ class SettingPage(QWidget):
         )
         root.addWidget(self.scrollArea, 1)
 
+        # 「关于」放第一个：分组按加入 expandLayout 的顺序自上而下排
+        self._build_about_group()
         self._build_account_group()
         self._build_download_group()
         self._build_cache_group()
         self._build_theme_group()
+
+    # ---- 关于 ----
+    def _build_about_group(self) -> None:
+        group = SettingCardGroup("关于", self.scrollWidget)
+
+        self.repoCard = _WidgetSettingCard(
+            FluentIcon.GITHUB,
+            "代码仓库",
+            REPO_SLUG,
+            [HyperlinkButton(REPO_URL, "打开仓库", group, FluentIcon.LINK)],
+            group,
+        )
+
+        self.checkUpdateBtn = BusyPushButton("检查更新", group)
+        self.checkUpdateBtn.reserve_busy("检查中")
+        self.updateCard = _WidgetSettingCard(
+            FluentIcon.UPDATE,
+            "检查更新",
+            f"当前版本 v{APP_VERSION}",
+            [self.checkUpdateBtn],
+            group,
+        )
+
+        self.autoUpdateSwitch = SwitchButton(group)
+        self.autoUpdateSwitch.setOnText("开")
+        self.autoUpdateSwitch.setOffText("关")
+        self.autoUpdateSwitch.setChecked(cfg.auto_check_update.value)
+        self.autoUpdateCard = _WidgetSettingCard(
+            FluentIcon.SYNC,
+            "自动检查更新",
+            "每次启动应用时在后台检查一次；没有新版本时不打扰",
+            [self.autoUpdateSwitch],
+            group,
+        )
+
+        self.mirrorCard = MirrorSettingCard(group)
+        self.mirrorCard.notify = self._notify_from_card
+        # 断言脚本与外部按名取用；卡片内部才是真正的持有者
+        self.mirrorCombo = self.mirrorCard.combo
+
+        self.licenseCard = _WidgetSettingCard(
+            FluentIcon.CERTIFICATE,
+            "开源许可",
+            "本项目 GPL-3.0 · 依赖 PySide6 (LGPLv3) / PySide6-Fluent-Widgets (GPLv3)",
+            [HyperlinkButton(LICENSE_URL, "查看协议", group, FluentIcon.LINK)],
+            group,
+        )
+
+        group.addSettingCards(
+            [
+                self.repoCard,
+                self.updateCard,
+                self.autoUpdateCard,
+                self.mirrorCard,
+                self.licenseCard,
+            ]
+        )
+        self.expandLayout.addWidget(group)
+        self.aboutGroup = group
+
+        self.checkUpdateBtn.clicked.connect(self._on_check_update)
+        self.autoUpdateSwitch.checkedChanged.connect(self._on_auto_update_toggled)
+
+    def _notify_from_card(self, kind: str, title: str, content: str) -> None:
+        """给 `MirrorSettingCard` 用的提示出口——组件不直接依赖本页的提示风格。"""
+        {"success": notify_success, "warning": notify_warning, "error": notify_error}.get(
+            kind, notify_info
+        )(title, content, parent=self, position=InfoBarPosition.TOP_RIGHT)
+
+    def _on_auto_update_toggled(self, enabled: bool) -> None:
+        # 即时生效，不进「保存下载设置」（同代理开关）
+        qconfig.set(cfg.auto_check_update, enabled)
+
+    def _on_mirror_changed(self, index: int) -> None:
+        mirror = self.mirrorCombo.itemData(index)
+        if mirror is None:
+            return
+        qconfig.set(cfg.gh_mirror, mirror)
+
+    def _on_check_update(self) -> None:
+        self.checkUpdateBtn.set_busy(True)
+        run_task(
+            fetch_latest_release,
+            on_success=self._on_release,
+            on_error=self._on_update_failed,
+            on_finished=lambda ok: self.checkUpdateBtn.set_busy(False),
+        )
+
+    def _on_release(self, info) -> None:
+        if not is_newer(info.tag, APP_VERSION):
+            self.updateCard.setContent(f"已是最新版本 v{APP_VERSION}")
+            notify_success(
+                "已是最新版本",
+                f"当前 v{APP_VERSION}，仓库最新发布为 {info.tag or '（无）'}",
+                parent=self,
+                position=InfoBarPosition.TOP_RIGHT,
+            )
+            return
+        self.updateCard.setContent(f"发现新版本 {info.tag}（当前 v{APP_VERSION}）")
+        show_update_dialog(info, self.window())
+
+    def _on_update_failed(self, exc: Exception) -> None:
+        if isinstance(exc, NoRelease):
+            notify_info(
+                "暂无发布版本",
+                f"{REPO_SLUG} 还没有发布过 Release",
+                parent=self,
+                position=InfoBarPosition.TOP_RIGHT,
+            )
+            return
+        lines = [cause_hint(exc) or str(exc) or type(exc).__name__]
+        if not cfg.gh_mirror.value:
+            lines.append("直连 GitHub 不通时，可在上方「下载加速」选一个镜像后重试。")
+        notify_error(
+            "检查更新失败",
+            "\n".join(lines),
+            parent=self,
+            position=InfoBarPosition.TOP_RIGHT,
+            duration=NEVER_DISMISS,
+        )
 
     # ---- 账号 ----
     def _build_account_group(self) -> None:
@@ -378,7 +440,7 @@ class SettingPage(QWidget):
         self.proxyEdit.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
-        self.proxyTestBtn = _BusyPushButton("测试", group)
+        self.proxyTestBtn = BusyPushButton("测试", group)
         self.proxyTestBtn.reserve_busy("测试中")
         self.proxyCard = _WidgetSettingCard(
             FluentIcon.GLOBE,

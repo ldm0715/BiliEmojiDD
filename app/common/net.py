@@ -25,13 +25,16 @@ import requests
 from biliemoji import Downloader, Dress, Emoji
 from biliemoji.client import BiliClient
 
-from app.common.config import cfg
+from app.common.config import APP_NAME, APP_VERSION, cfg
 from app.common.proxy import parse_proxy
 
 # 默认值哨兵：区分「没传，去读配置」与「显式传了 None，就是要直连」
 _FROM_CFG: Any = object()
 
 ProxiesArg = Mapping[str, str] | None
+
+# 非 B 站请求（检查更新）用的 UA：GitHub API 不带 UA 直接 403
+USER_AGENT = f"{APP_NAME}/{APP_VERSION}"
 
 
 def current_proxies() -> dict[str, str] | None:
@@ -60,6 +63,26 @@ def make_client(
     client = BiliClient(cookie=cookie, proxies=_resolve(proxies), **kwargs)
     _no_env(client.session)
     return client
+
+
+def make_session(
+    proxies: ProxiesArg | Any = _FROM_CFG,
+    *,
+    headers: Mapping[str, str] | None = None,
+) -> requests.Session:
+    """通用 requests 会话：检查更新这类**非 B 站**请求用它。
+
+    `make_client` 那套（`BiliClient` + cookie + B 站签名）不适用于 GitHub，但本模块
+    的两条硬规矩照守：代理只来自设置页、`trust_env = False`。
+    """
+    session = _no_env(requests.Session())
+    session.headers["User-Agent"] = USER_AGENT
+    if headers:
+        session.headers.update(headers)
+    resolved = _resolve(proxies)
+    if resolved:
+        session.proxies.update(resolved)
+    return session
 
 
 def make_emoji(cookie: str = "", proxies: ProxiesArg | Any = _FROM_CFG) -> Emoji:

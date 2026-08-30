@@ -143,13 +143,13 @@ check(
     f"复原：环收起、文案回到 {idle_text!r}（实际 {btn.text()!r}）",
 )
 
-print("== 2. 版式结构：四个分组 + 每组卡片数 ==")
+print("== 2. 版式结构：五个分组 + 每组卡片数 ==")
 groups = [w for w in page.scrollWidget.children() if isinstance(w, SettingCardGroup)]
-check(len(groups) == 4, f"四个 SettingCardGroup（实际 {len(groups)}）")
+check(len(groups) == 5, f"五个 SettingCardGroup（实际 {len(groups)}）")
 titles = [g.titleLabel.text() for g in groups]
 check(
-    titles == ["账号", "下载", "缓存", "外观"],
-    f"分组标题依次为 账号/下载/缓存/外观（实际 {titles}）",
+    titles == ["关于", "账号", "下载", "缓存", "外观"],
+    f"分组标题依次为 关于/账号/下载/缓存/外观（实际 {titles}）",
 )
 # 顶部是居中的应用身份区（大图标 / 应用名 + 版本号），细节断言见 check_search_cache.py
 check(page.titleLabel.text() == "BiliEmojiDD", "页面大标题为应用名")
@@ -164,7 +164,7 @@ group_x = groups[0].titleLabel.mapTo(page, groups[0].titleLabel.rect().topLeft()
 card_x = _cards_of(groups[0])[0].mapTo(page, page.rect().topLeft()).x()
 check(group_x == card_x, f"分组标题 / 卡片左对齐（{group_x} / {card_x}）")
 counts = [len(_cards_of(g)) for g in groups]
-check(counts == [3, 4, 2, 2], f"每组卡片数 3/4/2/2（实际 {counts}）")
+check(counts == [5, 3, 4, 2, 2], f"每组卡片数 5/3/4/2/2（实际 {counts}）")
 
 print("== 3. 下载目录副标题跟随 dirEdit ==")
 page.dirEdit.setText("X:/tmp/biliemoji")

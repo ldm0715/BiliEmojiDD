@@ -20,9 +20,11 @@
 ```
 main.py                 入口：先建 QApplication 再导入 MainWindow（线程亲和）
 app/
-├── MainWindow.py       FluentWindow 四页导航 + closeEvent 退出保护
+├── MainWindow.py       FluentWindow 五页导航 + 启动后静默检查更新 + closeEvent 退出保护
 ├── common/
 │   ├── config.py       AppConfig(QConfig) 单例，存 %APPDATA%/biliEmojiDD/config.json
+│   ├── version.py      版本号：读 pyproject.toml + tag 比较（is_newer）
+│   ├── resource.py     静态资源定位（编译后按 exe 目录找）
 │   ├── signal_bus.py   全局信号（缩略图、配置变更）
 │   ├── proxy.py        代理地址字符串工具（规范化 / 转 proxies 字典 / 打码）
 │   ├── net.py          联网对象工厂：显式代理 + trust_env=False（不读系统代理）
@@ -33,18 +35,27 @@ app/
 │   ├── task.py         线程层核心：Task(QRunnable) + TaskManager + run_task
 │   ├── thumb.py        异步缩略图（独立线程池 + QPixmapCache）
 │   ├── widgets.py      _CardGridBase 网格基类；Package/Dress/Queue/Detail 卡片与网格
+│   ├── page_scaffold.py 页面版式底座 + 版本号胶囊 version_badge
 │   ├── package_detail.py  表情包详情视图（两个入口复用）
 │   ├── image_viewer.py 遮罩图片查看器（FlipView lightbox + 左右翻页）
 │   ├── page_bar.py     自制数字分页条
+│   ├── updater.py      查 GitHub Release / 加速镜像 / 下载安装包 + SHA-256 校验
+│   ├── update_dialog.py 更新弹窗（markdown 渲染 + 下载并运行安装程序）
 │   ├── download_runner.py 统一下载流程 + 表情包/收藏集/混合批量下载
 │   ├── download_queue.py  会话级下载队列（混合表情包 + 收藏集）
 │   ├── dress_helpers.py   收藏集类别判别 + dlc id 读取（绕开 biliemoji typed 字段 bug）
 │   └── cache.py        全部表情包本地缓存
 └── view/
+    ├── home_page.py    主页（启动默认页）
     ├── emoji_page.py   表情包页（Pivot 双标签）
     ├── dress_page.py   收藏集页（四列搜索 / 多选加入队列 / 详情）
     ├── download_page.py 下载队列页（混合横向卡片 / 批量下载）
-    └── setting_page.py 设置页（Cookie / 下载 / 外观）
+    └── setting_page.py 设置页（关于 / 账号 / 下载 / 缓存 / 外观）
+
+packaging/              打包（非运行时代码，见 docs/update_and_packaging.md）
+├── build.py            Nuitka 编译 + NSIS + 便携 zip + SHA256SUMS + release_notes
+├── changelog.py        按版本号抽取 CHANGES.md 的小节
+└── installer.nsi       NSIS 安装脚本（当前用户级安装）
 ```
 
 ## 线程模型
@@ -95,3 +106,4 @@ UI 线程（主线程）              后台线程（QThreadPool / Python 线程
 
 - 配置：`AppConfig(QConfig)`，`qconfig.load` 持久化到 `%APPDATA%/biliEmojiDD/config.json`。`theme` 项带 `EnumSerializer(Theme)`（否则 `json.dump` 崩）。Cookie / 目录变更即时生效（每次操作现读 `cfg`）。
 - 缓存：`all_packages` 结果按 cookie 指纹 + 24h TTL 存 `%APPDATA%/biliEmojiDD/all_packages.json`；用 `EmotePackage.raw`（完整原始 dict）持久化、`from_dict` 无损重建。
+- 版本号：**唯一来源是 `pyproject.toml` 的 `[project] version`**，`app/common/version.py::project_version()` 用 `tomllib` 在运行时读（`[tool.uv] package=false` 拿不到 `importlib.metadata`）。编译后该文件随 exe 一起分发。读不到时返回 `"unknown"`——一个解析不出来的值，使检查更新安静地不提示而不是误报有新版。

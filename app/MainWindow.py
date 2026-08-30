@@ -1,7 +1,7 @@
 """主窗口：FluentWindow 导航 + 侧栏主题切换 + 关闭窗口时的下载保护。"""
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractAnimation
+from PySide6.QtCore import QAbstractAnimation, QTimer
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QStackedWidget
 from qfluentwidgets import (
@@ -10,16 +10,21 @@ from qfluentwidgets import (
     MessageBox,
     NavigationItemPosition,
     NavigationPushButton,
+    PushButton,
     Theme,
     qconfig,
     setTheme,
 )
 
-from app.common.config import cfg
+from app.common.config import APP_VERSION, cfg
+from app.common.notify import NEVER_DISMISS, notify_info
 from app.common.resource import app_icon
 from app.common.signal_bus import signal_bus
 from app.common.theme import is_dark
-from app.components.task import task_manager
+from app.common.version import is_newer
+from app.components.task import run_task, task_manager
+from app.components.update_dialog import show_update_dialog
+from app.components.updater import fetch_latest_release
 from app.components.video_cache import video_cache
 from app.view.download_page import DownloadPage
 from app.view.dress_page import DressPage
@@ -32,6 +37,9 @@ from app.view.home_page import (
     HomePage,
 )
 from app.view.setting_page import SettingPage
+
+# 启动自检延迟：先让首屏画完，别和页面构造抢线程
+_AUTO_CHECK_DELAY = 3000
 
 
 class MainWindow(FluentWindow):
@@ -49,6 +57,8 @@ class MainWindow(FluentWindow):
 
         self.initNavigation()
         self.initWindow()
+        if cfg.auto_check_update.value:
+            QTimer.singleShot(_AUTO_CHECK_DELAY, self._auto_check_update)
 
     # ---- 切页 ----
 
@@ -140,6 +150,37 @@ class MainWindow(FluentWindow):
         elif namespace == "emoji_filter":
             self.switchTo(self.emojiPage)
             self.emojiPage.filter_packages(keyword)
+
+    # ---- 检查更新 ----
+
+    def _auto_check_update(self) -> None:
+        """启动后静默查一次新版本。
+
+        **失败彻底静默**：启动时没网 / GitHub 不通不该弹错，用户要查自会去设置页点。
+        """
+        run_task(
+            fetch_latest_release,
+            on_success=self._on_auto_release,
+            on_error=lambda exc: None,
+        )
+
+    def _on_auto_release(self, info) -> None:
+        """有新版才出声，且只出一条带按钮的提示——不在启动时糊用户一脸模态窗。"""
+        if not is_newer(info.tag, APP_VERSION):
+            return
+        bar = notify_info(
+            f"发现新版本 {info.tag}",
+            f"当前 v{APP_VERSION}。可在此查看更新说明，或到「设置 → 关于」再操作。",
+            parent=self,
+            duration=NEVER_DISMISS,
+        )
+        button = PushButton("查看更新", bar)
+        button.clicked.connect(lambda: self._open_update_dialog(info, bar))
+        bar.addWidget(button)
+
+    def _open_update_dialog(self, info, bar) -> None:
+        bar.close()
+        show_update_dialog(info, self)
 
     def _toggle_theme(self) -> None:
         next_theme = Theme.LIGHT if is_dark() else Theme.DARK

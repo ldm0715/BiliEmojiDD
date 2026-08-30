@@ -39,6 +39,7 @@ from app.common.net import (
     make_downloader,
     make_dress,
     make_emoji,
+    make_session,
 )
 from app.common.notify import NEVER_DISMISS
 from app.common.proxy import (
@@ -118,6 +119,7 @@ check(
     make_downloader(max_workers=1)._build_session().trust_env is False,
     "make_downloader 建出来的 worker-local session 同理",
 )
+check(make_session().trust_env is False, "make_session（检查更新走它）同理")
 probe = {"http": "http://1.2.3.4:9", "https": "http://1.2.3.4:9"}
 check(
     dict(make_client(proxies=probe).session.proxies) == probe,

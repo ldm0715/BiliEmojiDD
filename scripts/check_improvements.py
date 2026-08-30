@@ -286,6 +286,10 @@ check(
     hasattr(sp, "openDirBtn") and sp.openDirBtn.text() == "打开下载文件夹",
     "设置页存在「打开下载文件夹」按钮",
 )
+from app.components import updater
+
+updater.set_enabled(False)  # MainWindow 启动后会静默查一次新版本
+
 from app.MainWindow import MainWindow
 
 win = MainWindow()
