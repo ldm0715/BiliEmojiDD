@@ -87,7 +87,7 @@ Windows 终端默认 GBK，脚本里的中文断言文案会 `UnicodeEncodeError
 | `docs/home_page.md` | 主页（欢迎页）：英雄卡 + 功能入口卡 + 快速上手 / 关于 / 最近搜索、`static/showcase` 静态素材与抓取脚本、**`ImageLabel` 每帧平滑缩放**、**`FlowLayout` sizeHint 只有一行高导致重叠**、定尺寸子项顶高最小宽度、`SmoothScroll.duration` 步数必须为整数 |
 | `docs/proxy_diagnostics.md` | 代理：**只认设置页里那一个地址**（开关 + 地址框）、**`trust_env=False`** 断开 Windows 系统代理这条暗线、`app/common/net.py` 联网工厂、`cause_hint` 成因表、设置页「测试」按钮 |
 | `docs/app_shell.md` | 应用外壳：全局字体 LXGW 文楷等宽（**Qt 不认 woff2**、首选族名、qfluentwidgets `getFont` 硬编码字体族需打补丁 + `sys.modules` 重绑）、**FreeType 渲染后端**（`gdi` 实测无效）、消息提示统一挂 `stackedWidget`、**切页去掉上游 300ms 整页位移动画** |
-| `docs/update_and_packaging.md` | 检查更新与打包发布：**版本号唯一来源是 `pyproject.toml`**、GitHub Release 查询与更新弹窗（`MessageBoxBase` 的 yesButton 要先 disconnect）、**下载加速镜像 ≠ 代理**、自定义源的增删改排（三个配置项分工 + 「先算顺序再改成员」）、测速三档与三色胶囊、手写拖动排序、**校验和固定直连取**、`CHANGES.md` 发版流程、Nuitka 参数逐条 + NSIS + 工作流、**非 ASCII 用户名下 Nuitka 的三处坑**、版本胶囊、**`ExpandSettingCard` 收起动画终值取到陈旧滚动条 range 导致「收不回去」** |
+| `docs/update_and_packaging.md` | 检查更新与打包发布：**版本号唯一来源是 `pyproject.toml`**、GitHub Release 查询与更新弹窗（`MessageBoxBase` 的 yesButton 要先 disconnect）、**下载加速镜像 ≠ 代理**、自定义源的增删改排（三个配置项分工 + 「先算顺序再改成员」）、测速三档与三色胶囊、手写拖动排序、**校验和固定直连取**、`CHANGES.md` 发版流程、**编译打包全在 GitHub runner 上（tag 触发 + `workflow_dispatch` 手动试编译）**、Nuitka 参数逐条 + NSIS + 工作流、**非 ASCII 用户名下 Nuitka 的三处坑**、版本胶囊、**`ExpandSettingCard` 收起动画终值取到陈旧滚动条 range 导致「收不回去」** |
 
 | `docs/reload_media.md` | 重新加载：图片 / 视频加载失败后的右键菜单与可点击失败态、**三层缓存作废必须先清 `QPixmapCache` 再 request**、`video_cache.forget` 只删自己 mkdtemp 出来的临时文件（不碰下载产物）、`_SpinnerMixin` 的加载中 / 失败 / 重来三态 |
 

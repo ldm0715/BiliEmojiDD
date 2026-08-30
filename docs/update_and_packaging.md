@@ -319,6 +319,18 @@ checkout → setup-uv → `uv python install 3.11` → `uv sync --all-groups` �
 `choco install nsis`）→ `packaging/build.py --installer --version ${{ github.ref_name }}` →
 `softprops/action-gh-release`（`body_path: dist/release_notes.md`，上传三个产物）。
 
+**编译打包全部在 GitHub 的 runner 上完成**，本地 `packaging/build.py` 只是开发期试跑用的。
+
+工作流还挂了 `workflow_dispatch`：可以在 Actions 页**手动触发**，不打 tag 也能验证
+「改了打包相关的东西之后还编不编得过」。手动触发时：
+
+- `version` 输入留空就不传 `--version`，`build.py` 自己读 `pyproject.toml`；
+- **不建 Release**（`Publish release` 有 `if: startsWith(github.ref, 'refs/tags/')`），
+  产物改用 `actions/upload-artifact` 挂到这次运行上供下载检查。
+
+注意手动触发**同样会走 `write_notes()`**：`CHANGES.md` 里必须有当前版本号那一节，
+否则 `changelog.extract` 会让构建失败（这是有意的，见第五节）。
+
 Python 锁死 3.11：qfluentwidgets 这个 fork 要求 `PySide6<=6.4.2`，而 6.4.2 没有 3.12 的
 wheel（见 CLAUDE.md 环境约束）。
 
