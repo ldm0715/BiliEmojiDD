@@ -8,3 +8,5 @@ build/
 .ruff_cache/
 .claude/
 screenshots/
+# Nuitka 编译失败时吐在项目根的报告
+nuitka-crash-report.xml

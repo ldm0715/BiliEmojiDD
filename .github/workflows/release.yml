@@ -1,0 +1,53 @@
+name: release
+
+# 打 tag 即发布：推 v* 标签 → 编译 → 打包 → 建 GitHub Release 并上传产物。
+# Release 正文来自 CHANGES.md 里对应版本的小节（见 packaging/changelog.py），
+# 应用内更新弹窗渲染的就是这段文字。
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.11
+        # 锁死 3.11：qfluentwidgets 这个 fork 要求 PySide6<=6.4.2，而 6.4.2 没有
+        # 3.12 的 wheel（见 CLAUDE.md 环境约束）
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Ensure NSIS
+        # runner 镜像是否自带 NSIS 各版本不一，找不到就用预装的 choco 装一个
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+            choco install nsis -y --no-progress
+          }
+          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build installer and portable zip
+        run: uv run python packaging/build.py --installer --version ${{ github.ref_name }}
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: dist/release_notes.md
+          files: |
+            dist/BiliEmojiDD-Setup-*.exe
+            dist/BiliEmojiDD-*-win64.zip
+            dist/SHA256SUMS.txt

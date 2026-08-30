@@ -47,6 +47,10 @@ uv run ruff check .              # 代码检查
 8. **`FlipView` / `MaskDialogBase` / `PipsPager` 上游 bug**
    - `FlipView._adjustItemSize` 空图除零、sizeHint 变化致滚动跑偏；`MaskDialogBase.setMaskColor` 的 B/G 参数写反；`MaskDialogBase` 把 `self.widget` 无对齐塞进布局导致「点遮罩关闭」失效；`PipsPager.setCurrentIndex` 会回发信号。
    - 这些都已在 `app/components/image_viewer.py` 里绕过并注释，**勿"修回去"**。完整清单见 [image_viewer.md](image_viewer.md) 第五节。
+9. **打包（Nuitka）**
+   - **资源路径分两种情形**：源码运行按 `__file__` 回溯项目根，编译后（模块里有 `__compiled__`）取 `sys.executable` 所在目录。`app/common/resource.py::_project_root()` 已处理，新增静态资源一律从 `PROJECT_ROOT` 起算并在 `packaging/build.py` 里加对应的 `--include-data-*`。
+   - **懒加载的模块 Nuitka 看不见**：`socks`（urllib3 只在代理写 `socks5://` 时才 import）必须 `--include-module=socks` 显式带上。同理新增按需 import 的第三方模块要检查是否进了 dist。
+   - **中文用户名会让 Nuitka 崩两处**：`depends.exe` 输出按 latin1 解析（DLL 扫描 assert 失败）、MinGW 工具链解压路径乱码。`build.py::ascii_workarounds()` 检测到非 ASCII 家目录时自动换 pefile 扫描器 + 把 `NUITKA_CACHE_DIR` 挪到 ASCII 路径。**若本机没装 MSVC**，MinGW 还会因为 Python 导入库路径含中文而 `cannot find -lpython311`——那只能把解释器装到 ASCII 路径下再编（CI 的 windows runner 全 ASCII + 自带 MSVC，不受影响）。详见 [update_and_packaging.md](update_and_packaging.md)。
 
 ## 修改指南
 
@@ -60,6 +64,16 @@ uv run ruff check .              # 代码检查
 
 - 以 `biliemoji==2.0.0` 实际 API 为准（读 `uv run python -c "import biliemoji, inspect; print(inspect.signature(...))"` 或包源码 `.venv/Lib/site-packages/biliemoji/`）。
 - 下载器 `on_progress(done, total, result)` 在 worker 线程回调，经 `run_task(needs_progress=True)` 桥接；不要在回调里直接碰控件。
+
+### 改版本号 / 发版
+
+**版本号只在 `pyproject.toml` 的 `[project] version` 一处维护**——运行时
+`app/common/version.py::project_version()` 读它，`packaging/build.py` 也读它，界面上三处
+显示（主页英雄卡 / 主页关于卡 / 设置页身份行）都走 `APP_VERSION`。别在任何地方硬编码版本串。
+
+发版：改 `pyproject.toml` → 在 `CHANGES.md` 补一节 → 打 tag `vX.Y.Z` 推上去，
+`.github/workflows/release.yml` 会编译、打包、建 Release。完整流程与打包细节见
+[update_and_packaging.md](update_and_packaging.md)。
 
 ### 修改后验证
 
