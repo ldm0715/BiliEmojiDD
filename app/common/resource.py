@@ -1,17 +1,35 @@
 """静态资源定位：应用图标、内置字体、主页展示图等。
 
-资源放在项目根的 `static/`（不是包内），所以路径按本文件位置回溯两级：
-`app/common/resource.py` → parents[0]=common、[1]=app、[2]=项目根。
+资源放在项目根的 `static/`（不是包内）。源码运行时按本文件位置回溯两级：
+`app/common/resource.py` → parents[0]=common、[1]=app、[2]=项目根；
+**Nuitka 编译后**换成 exe 所在目录（`--include-data-dir=static=static` 就是放那儿）。
 **任何缺失都静默降级**（返回空 `QIcon` / 空列表），不抛异常——少一张图不该让应用起不来。
 """
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from PySide6.QtGui import QIcon
 
-STATIC_DIR = Path(__file__).resolve().parents[2] / "static"
+
+def _project_root() -> Path:
+    """资源根目录：源码运行 = 项目根目录，编译后 = exe 所在目录。
+
+    Nuitka 会给每个编译模块注入 `__compiled__`；`sys.frozen` 顺带兼容其它打包器。
+    编译后 `__file__` 指向 dist 内的虚拟路径，不能拿来回溯。
+    """
+    if "__compiled__" in globals() or getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
+
+
+PROJECT_ROOT = _project_root()
+STATIC_DIR = PROJECT_ROOT / "static"
+# 版本号的唯一来源（见 app/common/version.py::project_version）。
+# 编译时用 --include-data-files=pyproject.toml=pyproject.toml 一起带上。
+PYPROJECT_PATH = PROJECT_ROOT / "pyproject.toml"
 APP_ICON_PATH = STATIC_DIR / "logo.ico"
 # 主页「关于」卡里的依赖徽标
 QFLUENT_LOGO_PATH = STATIC_DIR / "qfluentwidget.png"

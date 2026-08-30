@@ -15,6 +15,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "nuitka" },
     { name = "ruff" },
 ]
 
@@ -27,7 +28,10 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "ruff" }]
+dev = [
+    { name = "nuitka", specifier = ">=2.4" },
+    { name = "ruff" },
+]
 
 [[package]]
 name = "biliemoji"
@@ -214,6 +218,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/5f/f7/abb373e5757eaec4b
 wheels = [
     { url = "https://files.pythonhosted.org/packages/57/b0/0e52c878c53f245edd3a11020f20979b3f490f245af532c7cae3027754b5/idna-3.19-py3-none-any.whl", hash = "sha256:815e7be7a7806d54abb586dc943addc79e8b2ee16915059658cbeff4b1b43bf4", size = 68550, upload-time = "2026-08-18T05:14:22.343Z" },
 ]
+
+[[package]]
+name = "nuitka"
+version = "4.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/14/f7/305d1eca71f554f52cac820b8d1765aeb5fb2b3732d7f49f5a32aa4d97d2/nuitka-4.2.tar.gz", hash = "sha256:b6112c10a5d0431e2b4309780257a03049a42605290e83f771d57a067a387410", size = 4628471, upload-time = "2026-08-27T14:17:30.409Z" }
 
 [[package]]
 name = "pycocoa"

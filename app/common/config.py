@@ -18,12 +18,41 @@ from qfluentwidgets import (
     qconfig,
 )
 
+from app.common.version import project_version
+
 APP_NAME = "biliEmojiDD"
-# 与 pyproject.toml 的 version 对齐手工维护：[tool.uv] package=false，
-# 应用不是安装包，importlib.metadata 取不到版本
-APP_VERSION = "0.1.0"
+# 版本号唯一来源是 pyproject.toml 的 [project] version——改版本只改那一处。
+# （[tool.uv] package=false，应用不是安装包，importlib.metadata 取不到）
+APP_VERSION = project_version()
 APP_CONFIG_DIR = Path(os.getenv("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = APP_CONFIG_DIR / "config.json"
+
+# 代码仓库：设置页「关于」组与检查更新都读这里
+REPO_OWNER = "ldm0715"
+REPO_NAME = "BiliEmojiDD"
+REPO_SLUG = f"{REPO_OWNER}/{REPO_NAME}"
+REPO_URL = f"https://github.com/{REPO_SLUG}"
+RELEASES_URL = f"{REPO_URL}/releases"
+LICENSE_URL = f"{REPO_URL}/blob/main/LICENSE"
+LATEST_RELEASE_API = f"https://api.github.com/repos/{REPO_SLUG}/releases/latest"
+
+# GitHub 下载加速镜像（(下拉文案, 取值)）。
+# 这三家是**前缀式反代**：把原始 URL 整个接在镜像后面，形如
+#     https://gh-proxy.com/https://github.com/owner/repo/releases/download/v1/x.exe
+# 与「设置 → 下载 → 代理」是两套独立机制——代理改的是 requests 的 proxies=，
+# 镜像改的是 URL 本身，两者可以同时生效。
+# 用户还能在设置页自己加（存 cfg.custom_mirrors），完整清单走 updater.all_mirrors()。
+GH_MIRRORS = (
+    ("不使用（直连 GitHub）", ""),
+    ("自动（直连失败后依次尝试）", "auto"),
+    ("gh-proxy.com", "https://gh-proxy.com/"),
+    ("ghproxy.net", "https://ghproxy.net/"),
+    ("ghfast.top", "https://ghfast.top/"),
+)
+GH_MIRROR_AUTO = "auto"
+GH_MIRROR_VALUES = tuple(value for _, value in GH_MIRRORS)
+# 「自动」时按顺序尝试的内置镜像（不含直连与 auto 本身；用户自定义的由 updater 追加）
+GH_MIRROR_CHAIN = tuple(v for v in GH_MIRROR_VALUES if v.startswith("http"))
 
 # 字体渲染后端（见 app/common/font.py::apply_font_engine）。
 # 只有这两项：Qt 6.4.2 的 Windows 插件不认 `fontengine=gdi`（实测输出与默认逐像素相同）。
@@ -54,6 +83,16 @@ class AppConfig(QConfig):
     font_engine = OptionsConfigItem(
         "Appearance", "fontEngine", "default", OptionsValidator(list(FONT_ENGINES))
     )
+    # 启动时静默检查一次新版本；无新版 / 失败都不打扰，不想联网的用户一拨即关
+    auto_check_update = ConfigItem("Update", "autoCheck", True, BoolValidator())
+    # GitHub 下载加速镜像。"" = 直连，"auto" = 直连失败后依次试内置 + 自定义镜像。
+    # **不用 OptionsValidator**：用户可以自己加源，取值集合是动态的
+    gh_mirror = ConfigItem("Update", "ghMirror", "")
+    # 用户自己加的镜像地址（前缀式反代），一个 str 列表
+    custom_mirrors = ConfigItem("Update", "customMirrors", [])
+    # 加速源的显示 / 尝试顺序（内置 + 自定义混排，用户可拖动调整）。
+    # 只记顺序不记成员：列表里没有的源按默认顺序补在后面，删掉的源自动失效
+    mirror_order = ConfigItem("Update", "mirrorOrder", [])
 
 
 cfg = AppConfig()

@@ -1,4 +1,14 @@
-"""biliEmojiDD 入口。"""
+"""biliEmojiDD 入口。
+
+Copyright (C) 2026 gcnanmu
+
+本程序是自由软件：你可以依据自由软件基金会发布的 GNU 通用公共许可证（第 3 版，或者
+你选择的任何更新版本）的条款重新发布与修改它。
+
+发布本程序是希望它有用，但**不作任何担保**，甚至不包含适销性或特定用途适用性的默示
+担保。详见 GNU 通用公共许可证。你应当已随本程序收到一份许可证副本（见根目录 LICENSE），
+若没有，请查阅 <https://www.gnu.org/licenses/>。
+"""
 from __future__ import annotations
 
 import sys

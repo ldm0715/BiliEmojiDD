@@ -1,9 +1,14 @@
 [project]
 name = "bili-emoji-dd"
+# 版本号唯一来源：app/common/version.py::project_version 在运行时读这里，
+# packaging/build.py 也读这里。改版本只改这一行。
 version = "0.1.0"
 description = "B站表情包与收藏集下载器（PySide6 + QFluentWidgets + biliemoji）"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "gcnanmu" }]
 dependencies = [
     "biliemoji==2.0.0",
     "PySide6==6.4.2",
@@ -14,7 +19,9 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["ruff"]
+# nuitka 只在打包时用（packaging/build.py）。2.x 才有 --windows-console-mode，
+# 1.x 是已废弃的 --windows-disable-console
+dev = ["ruff", "nuitka>=2.4"]
 
 [tool.uv]
 package = false
