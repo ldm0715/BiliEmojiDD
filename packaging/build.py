@@ -32,6 +32,27 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from changelog import extract as extract_changelog
 
+
+def _force_utf8_output() -> None:
+    """把自己的 stdout / stderr 钉成 UTF-8。
+
+    GitHub runner 上 Python 的标准流按系统区域设置走 **cp1252**，而本脚本要打印的
+    Nuitka 命令里带中文（`--file-description=B站表情包/收藏集下载器`），后面几条
+    进度信息也是中文 —— 直接 `UnicodeEncodeError` 把构建打断在 `print` 上，
+    看起来像编译失败，实际连 Nuitka 都还没启动（v0.1.1 第一次发布就栽在这）。
+    本地中文 Windows 的 GBK 能编码中文，所以只在 CI 上暴露。
+
+    `errors="replace"` 是第二道保险：万一某个流不支持 UTF-8，也只是显示成问号，
+    不该让一次打印毁掉整个构建。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
+_force_utf8_output()
+
 ROOT = Path(__file__).resolve().parents[1]
 BUILD_DIR = ROOT / "build"
 DIST_DIR = ROOT / "dist"

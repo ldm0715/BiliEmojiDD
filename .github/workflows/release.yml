@@ -22,6 +22,10 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      # runner 上 Python 的标准流默认按区域设置走 cp1252，打印中文会 UnicodeEncodeError。
+      # build.py 自己也会把流钉成 UTF-8，这里再罩一层，连 Nuitka 子进程一起覆盖。
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
 
