@@ -9,7 +9,7 @@
 
 | 决定 | 选择 | 理由 |
 |---|---|---|
-| 版式 | 英雄卡 + 三张带图功能卡 + 快速上手 / 关于 / 最近搜索 | 信息密度与引导性最好 |
+| 版式 | 英雄卡 + 三张带图功能卡 + 快速上手 / 关于 | 信息密度与引导性最好 |
 | 展示图 | 一次性抓好裁好存进 `static/showcase/` 并入库 | **主页零网络请求**，离线可用、无 Cookie 依赖、断言脚本可直接跑 |
 | 组件 | 全部取自 qfluentwidgets | 主题切换自动跟随，不写自定义 QSS |
 | 导航 | 主页只发信号，`MainWindow` 负责 `switchTo` | 主页不反向引用主窗口 |
@@ -18,11 +18,11 @@
 
 | 文件 | 内容 |
 |---|---|
-| `app/view/home_page.py` | 新增。页面主体与五个私有卡片类 |
+| `app/view/home_page.py` | 新增。页面主体与四个私有卡片类 |
 | `app/common/resource.py` | 加 `SHOWCASE_DIR` / `showcase_images()` / `showcase_names()` 与两个依赖徽标路径 |
 | `app/components/download_queue.py` | 加 `item_cover_url(item)`，与队列卡共用取图口径 |
 | `app/components/widgets.py` | `QueueList._cover_url` 改为复用 `item_cover_url` |
-| `app/MainWindow.py` | 主页放第一位 + `_navigate` / `_search_from_home` 接线 |
+| `app/MainWindow.py` | 主页放第一位 + `_navigate` 接线 |
 | `app/view/emoji_page.py` | 加 `query_package_id()` / `filter_packages()` 公开入口 |
 | `app/view/dress_page.py` | 加 `search_keyword()` 公开入口 |
 | `scripts/fetch_showcase.py` | 新增。一次性抓取展示图（不是运行时代码） |
@@ -32,7 +32,7 @@
 ## 三、版式与模块
 
 ```
-主��                                     ← page_title + title_row（36px 页边距，与其余四页一致）
+主页                                     ← page_title + title_row（36px 页边距，与其余四页一致）
 ┌───────────────────────────────────────┐
 │ [logo] BiliEmojiDD  v0.1.0  [开始使用] │  _HeroCard
 │ 一句话简介          [打开下载文件夹]     │  · 主按钮随 Cookie 状态变文案与去向
@@ -46,14 +46,11 @@
 ┌────────────┐ ┌────────────────┐          SectionCard，宽窗两列 / 窄窗一列
 │ 快速上手 3 步│ │ 关于（含依赖徽标）│
 └────────────┘ └────────────────┘
-┌───────────────────────────────────────┐  _RecentSearchCard，无记录时整卡隐藏
-│ (2233) (小电视) (53) …                 │
-└───────────────────────────────────────┘
 ```
 
 用到的组件一律来自组件库：`SimpleCardWidget` / `CardWidget` / `HeaderCardWidget`（经
-`SectionCard`）/ `ScrollArea` / `FlowLayout` / `ImageLabel` / `IconWidget` /
-`PillPushButton` / `PrimaryPushButton` / `TransparentPushButton` / `HyperlinkButton` /
+`SectionCard`）/ `ScrollArea` / `ImageLabel`（经 `_FlatImageLabel`）/ `IconWidget` /
+`PrimaryPushButton` / `TransparentPushButton` / `HyperlinkButton` /
 `TitleLabel` `SubtitleLabel` `StrongBodyLabel` `BodyLabel` `CaptionLabel`。
 原生 Qt 只出现在布局容器（`QWidget` + `QVBoxLayout` / `QHBoxLayout` / `QGridLayout`），
 与其余四页的写法一致。
@@ -65,11 +62,16 @@
 取图口径统一在 `download_queue.item_cover_url()`，`QueueList` 也改为复用它，
 保证主页预览与下载页队列卡显示同一张图。
 
-### 最近搜索（`_RecentSearchCard`）
+### 曾经有过的「最近搜索」卡（已移除）
 
-直接 new `SearchHistory("dress" / "emoji_id" / "emoji_filter")` 读记录（该类不依赖浮层面板），
-合并成胶囊。点击发 `searchRequested(namespace, keyword)`，由 `MainWindow` 路由到对应页
-并调用新加的公开入口执行搜索。
+初版在底部放过一张 `_RecentSearchCard`：读三个 namespace 的 `SearchHistory` 做成胶囊，
+点一下带关键词跳到对应页搜索。**后来按需求整卡删掉**——搜索历史功能本身没动，
+两个搜索框上的浮层面板（`SearchHistoryPanel`）照常工作，见 `search_and_cache.md`。
+
+一并删掉的还有 `_FlowHolder`（`FlowLayout` 的 heightForWidth 容器）与
+`HomePage.searchRequested` / `MainWindow._search_from_home`。
+**保留** `EmojiPage.query_package_id` / `filter_packages` 与 `DressPage.search_keyword`
+这三个公开入口——它们是页面自己的 API，目前没有调用方。
 
 ## 四、静态素材
 
@@ -96,27 +98,45 @@ uv run python scripts/fetch_showcase.py --keyword 小电视 --emoji-ids 53 105
 
 ## 五、踩坑
 
-### 1. `ImageLabel` 每帧都在做平滑缩放（性能）
+### 1. `ImageLabel.paintEvent` 每帧都在缩放 + 组圆角路径 + 裁剪（性能）
 
-`ImageLabel.paintEvent` 里是：
+上游 `ImageLabel.paintEvent`（`label.py:342`）每一帧都要做三件事：
 
 ```python
-image = self.image.scaled(self.size() * self.devicePixelRatioF(),
+image = self.image.scaled(self.size() * self.devicePixelRatioF(),   # ① 平滑缩放
                           Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+path = QPainterPath(); path.arcTo(...)  ×4                          # ② 组圆角路径
+painter.setRenderHints(QPainter.Antialiasing); painter.setClipPath(path)  # ③ 抗锯齿裁剪
 ```
 
-**每一次重绘都要平滑缩放一遍源图**。主页一屏十几张图，叠上卡片 hover 动画与滚动重绘，
-实测整页重绘 ~20ms/帧（60fps 的预算是 16.6ms）。其他页面的卡片走 `QPushButton.setIcon`，
-缩放只做一次，所以没有这个问题。
+主页一屏 20 个 `ImageLabel`（展示图 ×2 条、队列封面 ×4、依赖徽标 ×2），
+**滚动时每帧全跑一遍**。其他页面的卡片走 `QPushButton.setIcon`，缩放只做一次，
+所以没有这个问题。
 
-修法见 `_fit_image()`：把图**预先缩放到恰好 `逻辑尺寸 × dpr`** 再交给 `ImageLabel`，
-之后把控件 `setFixedSize` 回逻辑尺寸。`QImage::scaled` 在目标尺寸与自身相同时
-`return *this`（隐式共享、零像素开销），于是 paintEvent 里那次缩放变成恒等操作。
+两层都是可以预先算好的静态开销，修法在 `_FlatImageLabel` + `_fit_image()`：
+
+1. 图**预先缩放到恰好 `逻辑尺寸 × dpr`**——`QImage::scaled` 在目标尺寸与自身相同时
+   `return *this`（隐式共享、零像素开销），①变成恒等操作；
+2. 圆角**一次性合成进 alpha 通道**（`_round_corners`：拿图当画刷画一个圆角矩形），
+   ②③直接消失；
+3. `paintEvent` 覆写成一句 `drawImage(0, 0, self._flat)`——纯 blit，不缩放不裁剪。
+
 与 `image_viewer._letterbox` 让 delegate 的 `scaled` 成为恒等变换是同一招。
+
+同机 A/B（`scripts/bench_home_paint.py --legacy` vs 默认，1100×820，40 帧中位数）：
+
+| | 改动前 | 改动后 |
+|---|---|---|
+| 单个 `ImageLabel` | 0.10–0.14 ms | **0.01 ms** |
+| 一条 `_ShowcaseStrip` | 0.62–0.82 ms | **0.04 ms** |
+| 整页 | 11.4–11.9 ms | 10.0–11.8 ms |
+
+**整页只降了 1ms 出头**——20 张图都很小（52/44/22 px），合计只占整页的一成多；
+真正让滚动变顺的是下面第 5 条。列在这里是因为这一项零风险且可复现。
 
 非方图要先裁到目标比例（`_cover_square` / 抓取脚本），否则尺寸对不上，缩放照样每帧发生。
 
-### 2. `FlowLayout` 的 sizeHint 只有一行高 → 胶囊重叠
+### 2. `FlowLayout` 的 sizeHint 只有一行高 → 胶囊重叠（**卡片已删，坑仍然成立**）
 
 `FlowLayout.sizeHint()` 直接返回 `minimumSize()`，而 `minimumSize()` 是**最大单项的尺寸**，
 与实际换了几行无关。把它的容器塞进卡片布局，卡片只会分配一行的高度，
@@ -129,6 +149,9 @@ image = self.image.scaled(self.size() * self.devicePixelRatioF(),
 并把 size policy 的 `setHeightForWidth(True)` 打开，父布局才会按当前宽度问出真实高度。
 `refresh_geometry()` 里**行数没变就不 `updateGeometry()`**，避免 resize → updateGeometry →
 resize 自激。
+
+`_FlowHolder` 随「最近搜索」卡一起删掉了，这段留作记录：**下次往布局里塞 `FlowLayout`
+还会踩同一个坑**。
 
 ### 3. 定尺寸子项会把整张卡的最小宽度顶起来
 
@@ -146,24 +169,41 @@ resize 自激。
 每帧要跑好几轮「改约束 → 重排 → 又一次 resize」（视频播放器踩过，见 `collection_video.md`）。
 展示图的 `_fit()` 同理，只做 `setVisible` 增减。
 
-### 5. `SmoothScroll.duration` 必须让步数为整数（**踩过，已放弃调整**）
+### 5. 一格滚轮被摊成 24 帧 —— 「滑不动」的真正来源
 
-主页内容只比视口高一点点（实测常见窗口下可滚范围 0～300px），
-上游一次滚轮把位移摊成 400ms / 24 帧，范围小的时候前几帧就撞到底、剩下时间空转，
-主观上是「粘滞感」。曾试图把本页的 `SmoothScroll.duration` 调到 160ms，**结果更糟**：
+上游 `SmoothScroll`（`qfluentwidgets/common/smooth_scroll.py`）：
 
 ```python
-self.stepsTotal = self.fps * self.duration / 1000     # 60 * 160/1000 = 9.6 ← 非整数
-...
-while self.stepsLeftQueue and self.stepsLeftQueue[0][1] == 0:   # 精确等于 0 才出队
+self.stepsTotal = self.fps * self.duration / 1000    # 60 * 400/1000 = 24
+self.smoothMoveTimer.start(int(1000 / self.fps))     # 16ms 一跳
+```
+
+**一格滚轮 = 24 次重绘，摊在 400ms 里**。主页单帧重绘 ~11ms，于是一格滚轮要交付
+`11 × 24 ≈ 270ms` 的绘制工作量，几乎把 400ms 填满；定时器每 16ms 就要一帧，而一帧要
+11ms，中间还有布局与事件——赶不上就丢帧，主观就是**滚一下走不动、发涩**。
+
+改法在 `page_scaffold.tune_scroll()`：把本页（与设置页）的 `duration` 调到 **200ms**，
+步数 24 → 12。**滚动总距离不变**——`__subDelta` 的插值对所有步求和恒等于 `delta`，
+与步数无关，实测两种设置都是一格 96px。变的是：绘制工作量减半、位移交付快一倍。
+
+| | 改动前 | 改动后 |
+|---|---|---|
+| 一格滚轮的帧数 | 21–24 | 10–12 |
+| 一格滚轮耗时 | 396 ms | 194 ms |
+| 一格滚轮的绘制总量 | ~270 ms | ~120 ms |
+
+**步数必须整除**（`tune_scroll` 会 `raise ValueError` 挡住）。曾经试过 160ms，结果更糟：
+
+```python
+self.stepsTotal = 60 * 160/1000 = 9.6                            # ← 非整数
+while self.stepsLeftQueue and self.stepsLeftQueue[0][1] == 0:    # 精确等于 0 才出队
 ```
 
 `stepsLeft` 从 9.6 每 tick 减 1 → 9.6, 8.6 … 0.6, **-0.4, -1.4 …永远等不到 0**，
 任务出不了队、定时器永不停止；而 `__subDelta` 的 `(m - x)` 在 `stepsLeft` 转负后变成负数
 → **每帧往回滚，页面被一直往上拽、根本滚不到底**。上游默认 400ms 恰好是 24.0 步才没暴露。
 
-结论：**要改就只能取 `1000/fps` 的整数倍**（fps=60 → 200 / 250 / 300ms）。
-当前版本已把这段调整整个撤掉，保持上游默认行为——手感与其他页面一致，也不冒这个险。
+所以 fps=60 时只能取 `1000/60` 的整数倍：**200 / 250 / 300ms**。当前取 200。
 
 ### 6. 其他
 
@@ -178,12 +218,18 @@ while self.stepsLeftQueue and self.stepsLeftQueue[0][1] == 0:   # 精确等于 0
 
 ```bash
 QT_QPA_PLATFORM=offscreen PYTHONIOENCODING=utf-8 uv run python scripts/check_home_page.py
+QT_QPA_PLATFORM=offscreen uv run python scripts/bench_home_paint.py            # 单帧重绘基准
+QT_QPA_PLATFORM=offscreen uv run python scripts/bench_home_paint.py --legacy   # 改动前的画法，做 A/B
 QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py   # 生成 home_page_{light,dark}.png
 ```
 
 `check_home_page.py` 覆盖：版式与页边距、三张功能卡的点击路由、英雄卡随 Cookie/队列刷新、
-队列预览张数与 `+N`、展示图能读出来 + 素材缺失时的降级、最近搜索胶囊与跳转载荷、
-响应式列数 3/2/1 与整页最小宽度、**滚轮能滚到底并停住**、目标页公开入口（用 monkeypatch
-拦掉 `run_task`，脚本不联网）、主题切换存活。
+队列预览张数与 `+N`、展示图能读出来 + 素材缺失时的降级、响应式列数 3/2/1 与整页最小宽度、
+**滚轮能滚到底并停住**、目标页公开入口（用 monkeypatch 拦掉 `run_task`，脚本不联网）、
+**滚动性能前提**（图全走 `_FlatImageLabel`、预处理图恰好 `size*dpr`、圆角已进 alpha、
+一格滚轮 ≤12 帧且步数整除）、主题切换存活。
+
+`bench_home_paint.py` 不是断言脚本、不进收尾批跑——它打印单帧重绘耗时，供改动前后对比。
+**不要用截图判断性能或观感**，离屏渲染出的图跟真机对不上。
 
 真实 B 站网络流程（抓取素材）依赖 Cookie，需人工跑 `scripts/fetch_showcase.py`。

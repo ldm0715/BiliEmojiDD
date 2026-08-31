@@ -236,3 +236,31 @@ class SectionCard(HeaderCardWidget):
         self.headerView.setFixedHeight(48)
         self.headerLayout.addStretch(1)
         self.headerLayout.addWidget(widget)
+
+
+# 滚轮平滑的时长（ms）。上游默认 400ms，配 60fps 就是**一格滚轮摊成 24 帧**
+# （`qfluentwidgets/common/smooth_scroll.py`：`stepsTotal = fps * duration / 1000`）。
+# 主页 / 设置页这种重页面单帧重绘十几毫秒，24 帧连着画必然掉帧，手感就是「滑不动」；
+# 而滚动总距离与帧数无关（插值求和恒等于 delta），缩短时长只是把同样的位移更快交付。
+SCROLL_DURATION = 200
+
+
+def tune_scroll(area, duration: int = SCROLL_DURATION) -> None:
+    """压低滚轮平滑的帧数，给重页面用。
+
+    **步数必须整除**：`stepsTotal` 是浮点数，`__smoothMove` 每帧 `-1` 后按
+    `== 0` 出队。`fps * duration` 不是 1000 的整数倍时（如 duration=130 → 7.8）
+    永远减不到 0，那一格滚轮会**永久留在队列里**，定时器再也不停。
+
+    上游的属性名拼错成 `scrollDelagate`（`scroll_area.py:15`），拼对了反而取不到。
+    """
+    delegate = getattr(area, "scrollDelagate", None)
+    if delegate is None:  # 不是 qfluentwidgets 的 ScrollArea，静默跳过
+        return
+    for scroll in (delegate.verticalSmoothScroll, delegate.horizonSmoothScroll):
+        if scroll.fps * duration % 1000:
+            raise ValueError(
+                f"duration={duration} 配 fps={scroll.fps} 会算出非整数步数，"
+                "滚动队列将永不清空"
+            )
+        scroll.duration = duration

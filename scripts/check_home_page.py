@@ -4,10 +4,12 @@
 2. 功能卡：三张卡标题正确，点击各自发出正确的 navigateRequested；
 3. 英雄卡：主按钮随 Cookie 状态换文案与去向，状态行随队列/配置刷新；
 4. 展示图：static/showcase 的图能读出来；素材缺失时整条缩略图带降级隐藏；
-5. 最近搜索：读三个 namespace 的历史，点胶囊发 searchRequested；无记录整卡隐藏；
-6. 响应式：宽/中/窄三档下功能卡列数为 3/2/1，且整页最小宽度不顶破最小窗口；
+5. 响应式：宽/中/窄三档下功能卡列数为 3/2/1，且整页最小宽度不顶破最小窗口；
+6. 滚轮能滚到底并停住；
 7. 目标页公开入口：EmojiPage.query_package_id / filter_packages、DressPage.search_keyword；
-8. 主题切换不崩。
+8. 滚动性能前提：图全走扁平化 ImageLabel（预缩放 + 预圆角 = 纯 blit）、
+   一格滚轮的帧数被压到 12 且步数整除（见 page_scaffold.tune_scroll）；
+9. 主题切换不崩。
 
 用法：QT_QPA_PLATFORM=offscreen PYTHONIOENCODING=utf-8 uv run python scripts/check_home_page.py
 """
@@ -32,14 +34,13 @@ from PySide6.QtWidgets import QApplication
 
 app = QApplication(sys.argv)
 
-from qfluentwidgets import ImageLabel, PillPushButton, Theme, qconfig, setTheme
+from qfluentwidgets import ImageLabel, Theme, qconfig, setTheme
 
 from app.common.config import cfg
 from app.common.signal_bus import signal_bus
 from app.components.content_meta import content_meta
 from app.components.download_queue import download_queue
-from app.components.page_scaffold import PAGE_MARGIN
-from app.components.search_history import SearchHistory
+from app.components.page_scaffold import PAGE_MARGIN, SCROLL_DURATION, tune_scroll
 from app.components.video_cache import video_cache
 from app.view import dress_page as dress_mod
 from app.view import emoji_page as emoji_mod
@@ -206,30 +207,7 @@ if page.emojiStrip.count() > 1:
     check(strip.visible_count() == strip.count(), "变宽后全部展示图恢复显示")
     strip.deleteLater()
 
-# ---------------------------------------------------------------- 5. 最近搜索
-print("\n[最近搜索]")
-check(not page.recentCard.isVisible(), "无历史记录时整卡隐藏")
-SearchHistory("dress").add("2233")
-SearchHistory("emoji_id").add("53")
-page.recentCard.reload()
-settle()
-check(page.recentCard.isVisible(), "有记录后卡片显示")
-check(page.recentCard.chip_count() == 2, f"两条记录两个胶囊（{page.recentCard.chip_count()}）")
-
-searches: list[tuple[str, str]] = []
-page.searchRequested.connect(lambda ns, kw: searches.append((ns, kw)))
-chip = page.recentCard._holder.findChildren(PillPushButton)[0]
-chip.click()
-settle()
-check(searches == [("dress", "2233")], f"点胶囊带 namespace + 关键词（{searches}）")
-
-SearchHistory("dress").clear()
-SearchHistory("emoji_id").clear()
-page.recentCard.reload()
-settle()
-check(not page.recentCard.isVisible(), "清空历史后整卡重新隐藏")
-
-# ---------------------------------------------------------------- 6. 响应式
+# ---------------------------------------------------------------- 5. 响应式
 print("\n[响应式]")
 for width, expect in ((1400, 3), (900, 2), (620, 1)):
     page.resize(width, 800)
@@ -242,12 +220,9 @@ check(page.bottom_columns() == 1, "窄窗口时快速上手 / 关于收敛成单
 min_w = page.minimumSizeHint().width()
 check(min_w <= 760, f"整页最小宽度不顶破最小窗口（{min_w} <= 760）")
 
-# ---------------------------------------------------------------- 7. 滚到底
+# ---------------------------------------------------------------- 6. 滚到底
 print("\n[滚轮滚到底]")
-SearchHistory("dress").add("2233")
-SearchHistory("dress").add("小电视")
-page.recentCard.reload()
-page.resize(1000, 620)  # 内容明显高于视口，保证有可滚范围
+page.resize(1000, 560)  # 内容明显高于视口，保证有可滚范围
 settle()
 scroll_bar = page.scrollArea.verticalScrollBar()
 if scroll_bar.maximum() > 0:
@@ -278,9 +253,8 @@ if scroll_bar.maximum() > 0:
     )
 else:
     print("  skip 当前尺寸下内容未溢出，无可滚范围")
-SearchHistory("dress").clear()
 
-# ---------------------------------------------------------------- 8. 目标页入口
+# ---------------------------------------------------------------- 7. 目标页入口
 print("\n[目标页公开入口]")
 # 拦掉 run_task：这些入口会真的发起 B 站请求，屏幕外脚本既不该联网，
 # 也会因为脚本先于 worker 退出而报「C++ object already deleted」假象。
@@ -321,6 +295,54 @@ check(dress.stacked.currentWidget() is dress.searchPage, "search_keyword 先回�
 check(dress.kwEdit.text() == "2233", "关键词已回填到搜索框")
 check(tasks == ["dress"], f"search_keyword 真的发起了搜索（{tasks}）")
 dress.close()
+
+# ------------------------------------------------------- 8b. 滚动流畅度前提
+print("\n[滚动性能]")
+# 滚动流畅度的上限就是单帧重绘耗时 × 一格滚轮摊开的帧数，这里守住这两个前提。
+labels = page.findChildren(home_mod._FlatImageLabel)
+check(len(labels) > 0, f"主页的图都用扁平化 ImageLabel（{len(labels)} 个）")
+check(
+    not page.findChildren(ImageLabel, options=Qt.FindChildOption.FindChildrenRecursively)
+    or all(isinstance(lb, home_mod._FlatImageLabel) for lb in page.findChildren(ImageLabel)),
+    "没有漏网的上游 ImageLabel（它每帧都要组圆角路径 + 抗锯齿裁剪）",
+)
+check(
+    home_mod._FlatImageLabel.paintEvent is not ImageLabel.paintEvent,
+    "扁平化 ImageLabel 走自己的 paintEvent（纯 blit，不裁剪不缩放）",
+)
+sized = [lb for lb in labels if not lb._flat.isNull()]
+check(bool(sized), f"至少有一张图真的画上了（{len(sized)}/{len(labels)}）")
+check(
+    all(
+        lb._flat.size() == lb.size() * lb._flat.devicePixelRatio()
+        for lb in sized
+    ),
+    "预处理图恰好是 size*dpr —— 绘制时是恒等 blit，没有隐藏的缩放",
+)
+if page.emojiStrip.count():
+    # 圆角是烤进 alpha 的，不是画的时候裁的：左上角像素必须是透明的
+    corner = page.emojiStrip._labels[0]._flat.pixelColor(0, 0)
+    check(corner.alpha() == 0, f"圆角已合成进 alpha（左上角 alpha={corner.alpha()}）")
+
+smooth = page.scrollArea.scrollDelagate.verticalSmoothScroll
+steps = smooth.fps * smooth.duration / 1000
+check(
+    smooth.duration == SCROLL_DURATION,
+    f"主页滚动区已调过平滑时长（{smooth.duration}ms，上游默认 400ms）",
+)
+check(
+    steps == int(steps),
+    f"一格滚轮的步数是整数（{steps}）——否则队列永远减不到 0，定时器不停",
+)
+check(steps <= 12, f"一格滚轮不超过 12 帧（当前 {steps:.0f}，上游默认 24）")
+try:
+    tune_scroll(page.scrollArea, 130)  # 60*130/1000 = 7.8，非整数
+except ValueError:
+    check(True, "非整除的时长被挡下（否则滚动队列永不清空）")
+else:
+    check(False, "非整除的时长应当抛 ValueError")
+finally:
+    tune_scroll(page.scrollArea)  # 恢复
 
 # ---------------------------------------------------------------- 9. 主题
 print("\n[主题]")

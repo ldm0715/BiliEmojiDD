@@ -3,26 +3,24 @@
 启动落在表情包页的「按 ID 查询」标签时整页是空的，既不好看也没告诉用户能做什么。
 本页用 Fluent 卡片版式回答三个问题：这是什么、我能做什么、我该从哪一步开始。
 
-五个模块，自上而下：
+四个模块，自上而下：
 
 1. `_HeroCard`   —— logo / 应用名 / 版本 / 一句话简介 + 状态概览 + 主按钮（随 Cookie 状态变）
 2. `_FeatureCard` ×3 —— 表情包 / 收藏集 / 下载，整卡可点，前两张带 `static/showcase` 本地展示图
 3. `_QuickStartCard` —— 三步上手，每步一个跳转按钮
 4. `_AboutCard`  —— 版本 / SDK / 链接 / 配置目录 / 免责声明
-5. `_RecentSearchCard` —— 复用搜索历史，点胶囊直接带关键词跳到对应页搜索
 
 **本页零网络请求**：展示图来自 `static/showcase/`（由 `scripts/fetch_showcase.py` 一次性
 抓好入库），状态数据全是本地配置与内存队列。
 
-导航一律走信号（`navigateRequested` / `searchRequested`）交给 `MainWindow` 处理，
-本页不反向引用主窗口。
+导航一律走信号（`navigateRequested`）交给 `MainWindow` 处理，本页不反向引用主窗口。
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QImage
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QBrush, QImage, QPainter
 from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
@@ -35,12 +33,10 @@ from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
     CardWidget,
-    FlowLayout,
     FluentIcon,
     HyperlinkButton,
     IconWidget,
     ImageLabel,
-    PillPushButton,
     PrimaryPushButton,
     ScrollArea,
     SimpleCardWidget,
@@ -69,9 +65,9 @@ from app.components.page_scaffold import (
     SectionCard,
     page_title,
     title_row,
+    tune_scroll,
     version_badge,
 )
-from app.components.search_history import SearchHistory
 from app.components.thumb import thumb_manager
 
 # 导航 key：与 MainWindow._navigate 的映射表一一对应
@@ -104,30 +100,91 @@ def _sdk_version() -> str:
         return "?"
 
 
-def _fit_image(label: ImageLabel, image: QImage, width: int, height: int) -> None:
-    """把图预缩放到 width×height×dpr 交给 ImageLabel，再把控件钉回逻辑尺寸。
+def _round_corners(image: QImage, radius: float) -> QImage:
+    """把圆角合成进 alpha 通道（`radius <= 0` 原样返回）。
 
-    **`ImageLabel.paintEvent` 每次重绘都会 `self.image.scaled(self.size()*dpr, …,
-    SmoothTransformation)`**：源图尺寸对不上时，每一帧都要做一次平滑缩放。主页一屏十几张
-    图叠上卡片 hover 动画就是肉眼可见的掉帧（其他页面的卡片走 `QPushButton.setIcon`，
-    缩放只做一次，所以不卡）。
-
-    `QImage::scaled` 在目标尺寸与自身相同时直接返回隐式共享副本、零像素开销，
-    所以预先缩放到恰好 `size*dpr` 就把每帧的缩放变成了恒等操作——
-    与 `image_viewer._letterbox` 让 delegate 的 scaled 成为恒等变换是同一招。
+    画刷原点就是 (0, 0)，与图一一对应，所以「用图当画刷画一个圆角矩形」
+    等价于「把图按圆角裁一刀」，且边缘带抗锯齿——只是这一刀只挨一次。
     """
-    dpr = label.devicePixelRatioF()
-    target = QSize(max(1, int(width * dpr)), max(1, int(height * dpr)))
-    if not image.isNull():
-        # 素材已按目标比例裁好（fetch_showcase / _cover_square），这里是等比缩放
-        label.setImage(
-            image.scaled(
+    if radius <= 0:
+        return image
+    out = QImage(image.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    out.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(out)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QBrush(image))
+    painter.drawRoundedRect(
+        QRectF(0, 0, image.width(), image.height()), radius, radius
+    )
+    painter.end()
+    return out
+
+
+class _FlatImageLabel(ImageLabel):
+    """圆角预先烤进 alpha 的 `ImageLabel`：`paintEvent` 退化成一次纯 blit。
+
+    上游 `ImageLabel.paintEvent`（`label.py:342`）每帧都要用 4 段 `arcTo` 组一条
+    圆角路径、开抗锯齿、`setClipPath`，然后才 `drawImage`。主页一屏 20 个
+    `ImageLabel`，**滚动时每帧全跑一遍**——实测占整页单帧重绘的四分之一
+    （19.1ms，把它们全隐藏后 14.3ms，见 `scripts/bench_home_paint.py`）。
+
+    圆角是静态的，没有理由每帧重算：建图时合成进 alpha，之后 `paintEvent` 只剩
+    一次等尺寸 blit（图按 `size*dpr` 预缩放并标好 `devicePixelRatio`，绘制时
+    既不缩放也不裁剪）。和 `image_viewer._letterbox` 让 delegate 的 `scaled`
+    成为恒等变换是同一招。
+
+    **不覆写 `__init__`**：`ImageLabel.__init__` 是库自实现的 `singledispatchmethod`，
+    子类加必填位置参数直接 TypeError（`PushButton` / `InfoBadge` 同源坑）。
+    初始化一律走库留的 `_postInit()` 钩子。
+    """
+
+    def _postInit(self) -> None:
+        self._flat = QImage()
+        self._radius = 0
+
+    def set_radius(self, radius: int) -> None:
+        """圆角半径。要在喂图之前设——圆角是烤进图里的，不是画的时候裁的。"""
+        self._radius = radius
+
+    def set_flat_image(self, image: QImage, width: int, height: int) -> None:
+        """预缩放 + 预圆角，并把控件钉回逻辑尺寸。"""
+        dpr = self.devicePixelRatioF()
+        target = QSize(max(1, round(width * dpr)), max(1, round(height * dpr)))
+        if image.isNull():
+            self._flat = QImage()
+        else:
+            # 素材已按目标比例裁好（fetch_showcase / _cover_square），这里是等比缩放
+            scaled = image.scaled(
                 target,
                 Qt.AspectRatioMode.IgnoreAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
-        )
-    label.setFixedSize(width, height)  # setImage 会按像素尺寸设死，改回逻辑尺寸
+            self._flat = _round_corners(scaled, self._radius * dpr)
+            self._flat.setDevicePixelRatio(dpr)
+        self.image = self._flat  # 上游的 isNull() / pixmap() 仍读这个字段
+        self.setFixedSize(width, height)
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        if self._flat.isNull():
+            return
+        QPainter(self).drawImage(0, 0, self._flat)
+
+
+def _fit_image(label: _FlatImageLabel, image: QImage, width: int, height: int) -> None:
+    """把图预处理到 width×height×dpr 交给 `_FlatImageLabel`。
+
+    **上游 `ImageLabel.paintEvent` 每次重绘都会 `self.image.scaled(self.size()*dpr,
+    …, SmoothTransformation)` 再套一层圆角裁剪**：源图尺寸对不上时，每一帧都要
+    做一次平滑缩放 + 组路径 + 裁剪。主页一屏十几张图叠上卡片 hover 动画就是
+    肉眼可见的掉帧（其他页面的卡片走 `QPushButton.setIcon`，缩放只做一次，
+    所以不卡）。
+
+    `QImage::scaled` 在目标尺寸与自身相同时直接返回隐式共享副本、零像素开销，
+    所以预先缩放到恰好 `size*dpr`，再把圆角一并烤进 alpha，每帧就只剩一次 blit。
+    """
+    label.set_flat_image(image, width, height)
 
 
 def _cover_square(pixmap, side: int, dpr: float) -> QImage:
@@ -166,15 +223,15 @@ class _ShowcaseStrip(QWidget):
         self.setMinimumWidth(0)
 
         names = showcase_names(kind)
-        self._labels: list[ImageLabel] = []
+        self._labels: list[_FlatImageLabel] = []
         height = int(width * ratio)
         for path in showcase_images(kind):
             source = QImage(str(path))
             if source.isNull():  # 文件损坏 / 格式不支持
                 continue
-            label = ImageLabel(self)
-            label.setBorderRadius(6, 6, 6, 6)
-            # 预缩放到 size*dpr：否则每帧重绘都要平滑缩放一次（见 _fit_image）
+            label = _FlatImageLabel(self)
+            label.set_radius(6)
+            # 预缩放 + 预圆角：否则每帧重绘都要平滑缩放并重组圆角路径（见 _fit_image）
             _fit_image(label, source, width, height)
             label.setToolTip(names.get(path.name, ""))
             layout.addWidget(label)
@@ -436,7 +493,7 @@ class _AboutCard(SectionCard):
         logo_row = QHBoxLayout()
         logo_row.setContentsMargins(0, 2, 0, 2)
         logo_row.setSpacing(12)
-        self.stackLogos: list[ImageLabel] = []
+        self.stackLogos: list[_FlatImageLabel] = []
         for path, tip in (
             (PYSIDE_LOGO_PATH, "PySide6 (Qt for Python)"),
             (QFLUENT_LOGO_PATH, "PyQt-Fluent-Widgets"),
@@ -444,8 +501,8 @@ class _AboutCard(SectionCard):
             source = QImage(str(path)) if path.is_file() else QImage()
             if source.isNull():
                 continue
-            logo = ImageLabel(holder)
-            # 按原图比例定宽，再预缩放到 size*dpr（见 _fit_image）
+            logo = _FlatImageLabel(holder)
+            # 按原图比例定宽，再预缩放到 size*dpr（见 _fit_image）；徽标不加圆角
             width = max(1, round(_DEP_LOGO_H * source.width() / source.height()))
             _fit_image(logo, source, width, _DEP_LOGO_H)
             logo.setToolTip(tip)
@@ -502,10 +559,10 @@ class _QueuePreviewStrip(QWidget):
         # 同 _ShowcaseStrip：不让定尺寸封面把功能卡的最小宽度顶起来
         layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         self.setMinimumWidth(0)
-        self._labels: list[ImageLabel] = []
+        self._labels: list[_FlatImageLabel] = []
         for _ in range(self._MAX):
-            label = ImageLabel(self)
-            label.setBorderRadius(6, 6, 6, 6)
+            label = _FlatImageLabel(self)
+            label.set_radius(6)
             label.setFixedSize(size, size)
             label.hide()
             layout.addWidget(label)
@@ -529,8 +586,10 @@ class _QueuePreviewStrip(QWidget):
             if index >= len(shown):
                 label.hide()
                 continue
-            label.setImage(QImage())  # 清掉上一项的图，避免错位残留
-            label.setFixedSize(self._size, self._size)
+            # 清掉上一项的图，避免封面还没到位时残留错位的旧图。
+            # 必须走 _fit_image：`_FlatImageLabel` 画的是自己那份预处理图，
+            # 上游的 setImage 只改 `self.image`，摸不到它。
+            _fit_image(label, QImage(), self._size, self._size)
             label.setToolTip(_item_name(shown[index]))
             label.show()
         rest = len(items) - len(shown)
@@ -554,108 +613,10 @@ def _item_name(item) -> str:
     return getattr(item, "text", None) or getattr(item, "name", None) or "未命名"
 
 
-class _FlowHolder(QWidget):
-    """`FlowLayout` 的容器：把布局的 heightForWidth 转成控件自身的高度。
-
-    **`FlowLayout.sizeHint()` 返回的是 `minimumSize()`——最大单项的尺寸，也就是
-    「一行」的高度**，与实际换了几行无关。直接把它塞进卡片布局，卡片只会给一行的高度，
-    第二行往后的胶囊全部溢出、压在下方内容上（最近搜索重叠就是这么来的）。
-    `search_history.py` 的浮层面板不进任何布局、自己 `setGeometry`，所以没暴露这个问题。
-
-    修法是走 Qt 官方那套：控件声明 `hasHeightForWidth`，size policy 打开
-    `setHeightForWidth(True)`，父布局据此按当前宽度问出真实高度。
-    """
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.flowLayout = FlowLayout(self, needAni=False)
-        self.flowLayout.setContentsMargins(0, 0, 0, 0)
-        self.flowLayout.setHorizontalSpacing(6)
-        self.flowLayout.setVerticalSpacing(6)
-        self._last_height = -1
-        policy = QSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
-        )
-        policy.setHeightForWidth(True)
-        self.setSizePolicy(policy)
-
-    def hasHeightForWidth(self) -> bool:
-        return True
-
-    def heightForWidth(self, width: int) -> int:
-        return self.flowLayout.heightForWidth(width)
-
-    def sizeHint(self) -> QSize:
-        width = self.width() or super().sizeHint().width()
-        return QSize(width, self.heightForWidth(width))
-
-    def minimumSizeHint(self) -> QSize:
-        return self.flowLayout.minimumSize()
-
-    def refresh_geometry(self) -> None:
-        """行数变了才通知父布局重算，避免 resize → updateGeometry → resize 自激。"""
-        height = self.heightForWidth(self.width())
-        if height == self._last_height:
-            return
-        self._last_height = height
-        self.updateGeometry()
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self.refresh_geometry()
-
-
-class _RecentSearchCard(SectionCard):
-    """最近搜索：三个 namespace 的记录合并成胶囊，点击带关键词跳转。"""
-
-    activated = Signal(str, str)  # (namespace, keyword)
-
-    # (namespace, 图标, 提示前缀)
-    _SOURCES = (
-        ("dress", FluentIcon.ALBUM, "收藏集搜索"),
-        ("emoji_id", FluentIcon.EMOJI_TAB_SYMBOLS, "表情包 ID"),
-        ("emoji_filter", FluentIcon.SEARCH, "表情包过滤"),
-    )
-    _MAX_CHIPS = 12
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("最近搜索", parent)
-        self._holder = _FlowHolder(self.view)
-        self._flow = self._holder.flowLayout
-        self.add_widget(self._holder)
-        self.reload()
-
-    def chip_count(self) -> int:
-        return self._flow.count()
-
-    def reload(self) -> None:
-        """重读历史文件重建胶囊；没有任何记录时整卡隐藏。"""
-        # FlowLayout.takeAt 返回的是 widget 不是 QLayoutItem，清空一律用库自带的
-        # takeAllWidgets()（内部已 deleteLater）。本卡没有常驻子控件，无需先摘出来。
-        self._flow.takeAllWidgets()
-        total = 0
-        for namespace, icon, prefix in self._SOURCES:
-            for text in SearchHistory(namespace).items():
-                if total >= self._MAX_CHIPS:
-                    break
-                chip = PillPushButton(icon, text, self._holder)
-                chip.setCheckable(False)
-                chip.setCursor(Qt.CursorShape.PointingHandCursor)
-                chip.setToolTip(f"{prefix}: {text}")
-                chip.clicked.connect(
-                    lambda _=False, ns=namespace, t=text: self.activated.emit(ns, t)
-                )
-                self._flow.addWidget(chip)
-                total += 1
-        self._holder.refresh_geometry()  # 行数变了，重新向卡片报高度
-        self.setVisible(total > 0)
-
-
 class HomePage(QWidget):
     """主页。导航一律发信号交给 MainWindow，本页不引用主窗口。"""
 
     navigateRequested = Signal(str)  # NAV_EMOJI / NAV_DRESS / NAV_DOWNLOAD / NAV_SETTING
-    searchRequested = Signal(str, str)  # (namespace, keyword)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -684,6 +645,8 @@ class HomePage(QWidget):
             "QScrollArea{border:none;background:transparent}"
             ".QWidget{background:transparent}"
         )
+        # 本页单帧重绘十几毫秒，按上游默认的 24 帧 / 格滚必掉帧（见 tune_scroll）
+        tune_scroll(self.scrollArea)
         root.addWidget(self.scrollArea, 1)
 
         content = QVBoxLayout(self.scrollWidget)
@@ -707,10 +670,6 @@ class HomePage(QWidget):
         self.quickStartCard.navigate.connect(self.navigateRequested.emit)
         self.aboutCard = _AboutCard(self.scrollWidget)
         content.addLayout(self.bottomGrid)
-
-        self.recentCard = _RecentSearchCard(self.scrollWidget)
-        self.recentCard.activated.connect(self.searchRequested.emit)
-        content.addWidget(self.recentCard)
         content.addStretch(1)
 
         self._reflow(force=True)
@@ -836,4 +795,3 @@ class HomePage(QWidget):
         super().showEvent(event)
         self.heroCard.refresh()
         self._refresh_queue()
-        self.recentCard.reload()  # 历史是别的页写的，每次回主页重读

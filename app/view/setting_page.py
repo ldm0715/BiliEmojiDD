@@ -66,7 +66,7 @@ from app.common.version import is_newer
 from app.components.disk_cache import MB, clear_all, total_size
 from app.components.download_runner import open_in_explorer
 from app.components.mirror_card import MirrorSettingCard
-from app.components.page_scaffold import BusyPushButton, version_badge
+from app.components.page_scaffold import BusyPushButton, tune_scroll, version_badge
 from app.components.proxy_probe import PROBE_NAME, PROBE_URL, probe_proxy
 from app.components.task import run_task
 from app.components.update_dialog import show_update_dialog
@@ -190,6 +190,8 @@ class SettingPage(QWidget):
             "QScrollArea{border:none;background:transparent}"
             ".QWidget{background:transparent}"
         )
+        # 本页与主页同样重（单帧重绘十几毫秒），按上游默认的 24 帧 / 格滚必掉帧
+        tune_scroll(self.scrollArea)
         root.addWidget(self.scrollArea, 1)
 
         # 「关于」放第一个：分组按加入 expandLayout 的顺序自上而下排

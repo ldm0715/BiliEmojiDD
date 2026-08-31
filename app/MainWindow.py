@@ -139,9 +139,8 @@ class MainWindow(FluentWindow):
         )
         self._update_theme_icon()
         qconfig.themeChangedFinished.connect(self._update_theme_icon)
-        # 主页只发信号（不反向引用窗口），跳转与带参搜索都在这里落地
+        # 主页只发信号（不反向引用窗口），跳转在这里落地
         self.homePage.navigateRequested.connect(self._navigate)
-        self.homePage.searchRequested.connect(self._search_from_home)
 
     def _navigate(self, key: str) -> None:
         page = {
@@ -152,18 +151,6 @@ class MainWindow(FluentWindow):
         }.get(key)
         if page is not None:
             self.switchTo(page)
-
-    def _search_from_home(self, namespace: str, keyword: str) -> None:
-        """主页「最近搜索」胶囊：跳到对应页并带上关键词执行。"""
-        if namespace == "dress":
-            self.switchTo(self.dressPage)
-            self.dressPage.search_keyword(keyword)
-        elif namespace == "emoji_id":
-            self.switchTo(self.emojiPage)
-            self.emojiPage.query_package_id(keyword)
-        elif namespace == "emoji_filter":
-            self.switchTo(self.emojiPage)
-            self.emojiPage.filter_packages(keyword)
 
     # ---- 检查更新 ----
 
