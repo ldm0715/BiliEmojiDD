@@ -60,6 +60,7 @@ uv run python main.py
 - [应用外壳](docs/app_shell.md) — 全局字体 LXGW 文楷等宽、FreeType 渲染后端、消息提示统一挂内容区、切页去掉位移动画
 - [检查更新与打包发布](docs/update_and_packaging.md) — 版本号单点维护、更新弹窗、下载加速镜像与校验、`CHANGES.md` 发版流程、Nuitka + NSIS 与工作流
 - [重新加载](docs/reload_media.md) — 图片 / 视频加载失败后的右键菜单与可点击失败态、缓存作废顺序
+- [GIF 标识与动图预览](docs/gif_preview.md) — 卡片左下角 GIF 角标、表情详情悬浮播放、查看器打开即播
 
 更新日志见 [CHANGES.md](CHANGES.md)。
 

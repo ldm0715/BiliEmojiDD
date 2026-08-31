@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from functools import partial
 
-from PySide6.QtCore import QRect, QSize, Qt, Signal
-from PySide6.QtGui import QAction, QIcon
+from PySide6.QtCore import QEvent, QRect, QSize, Qt, Signal
+from PySide6.QtGui import QAction, QCursor, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -42,6 +42,7 @@ from app.components.download_runner import (
     package_download_dir,
 )
 from app.components.dress_helpers import category_name, is_collection
+from app.components.gif import movie_from_cache, package_has_gif
 from app.components.thumb import thumb_manager
 
 _PACKAGE_CELL = QSize(160, 160)
@@ -51,6 +52,59 @@ _SEL_INSET = 4  # 选中高亮相对卡片边缘的内缩，相邻卡片之间�
 _BADGE_MARGIN = 6  # 「已下载」徽标距卡片右上角的边距
 _SPINNER_SIZE = 28  # 缩略图加载环直径
 _RETRY_SIZE = 28  # 加载失败后的重试按钮直径
+
+
+def _make_gif_badge(parent: QWidget):
+    """「GIF」小角标：钉在图片区左下角，尽量小、不压住图。
+
+    必须 `setFixedSize` 收窄：上游 qss 给 `InfoBadge` 的 `min-width` 会把「GIF」三个字
+    撑到 50px，压在 80px 见方的表情图上等于横贯大半张图、看着像盖在正中间。
+    尺寸按字体实测现算（换字体后仍然贴合），不用 `setStyleSheet` 改
+    —— `InfoBadge` 构造时已注册进 `styleSheetManager`，切主题会被重刷冲掉。
+    """
+    badge = InfoBadge.attension("GIF", parent)
+    badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    fm = badge.fontMetrics()
+    badge.setFixedSize(fm.horizontalAdvance("GIF") + 12, fm.height() + 4)
+    # 角标只是标记，不能吃掉图片区的点击 / 悬浮
+    badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    return badge
+
+
+class _GifBadgeMixin:
+    """把 GIF 角标钉在图片区左下角，并跟着图片区的几何变化重钉。
+
+    单靠卡片自己的 `resizeEvent` 不够：`set_cell()` 是「先 setFixedSize(卡片) 再
+    setFixedSize(图片区)」，卡片那次 resize 触发重钉时量到的还是**旧的图片区几何**，
+    之后图片区变大就没人再钉一次了 —— 角标于是停在按小图算出来的位置，看着像在图中间。
+    所以直接监听图片区自己的 Resize/Move 事件。
+    """
+
+    def _init_gif_badge(self, visible: bool, image_widget: QWidget) -> None:
+        self.gifBadge = _make_gif_badge(self)
+        self.gifBadge.setVisible(visible)
+        self._gifAnchor = image_widget
+        image_widget.installEventFilter(self)
+        self._pin_gif_badge()
+
+    def eventFilter(self, watched, event):
+        if watched is getattr(self, "_gifAnchor", None) and event.type() in (
+            QEvent.Type.Resize,
+            QEvent.Type.Move,
+        ):
+            self._pin_gif_badge()
+        return super().eventFilter(watched, event)
+
+    def _pin_gif_badge(self) -> None:
+        badge = getattr(self, "gifBadge", None)
+        if badge is None or badge.isHidden():
+            return
+        rect = self._gifAnchor.geometry()
+        badge.move(
+            rect.left() + _BADGE_MARGIN,
+            rect.bottom() - badge.height() - _BADGE_MARGIN,
+        )
+        badge.raise_()
 
 
 class _SpinnerMixin:
@@ -159,10 +213,12 @@ def _package_cover_url(pkg):
     return pkg.url
 
 
-class EmojiCard(_SpinnerMixin, QWidget):
+class EmojiCard(_GifBadgeMixin, _SpinnerMixin, QWidget):
     """单个表情卡片：图标（随单元格缩放）+ 全名（独立文字组件，超长分行，不遮挡图标）。
 
     复用 _CardGridBase 契约：整卡可点（clicked 载荷为卡片自身），供详情页打开图片查看器。
+    动图（item 第三位为 True）左下角挂「GIF」徽标，**鼠标悬浮才播放**：
+    缩略图那层只解首帧，真要动起来得拿 `image_cache` 里的原始字节喂 QMovie。
     """
 
     clicked = Signal(object)  # EmojiCard 自身
@@ -170,10 +226,13 @@ class EmojiCard(_SpinnerMixin, QWidget):
 
     def __init__(self, item, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        text, url = item
+        text, url = item[0], item[1]
         self.url = url
-        self.item = item  # (text, url)
+        self.is_gif = bool(item[2]) if len(item) > 2 else False
+        self.item = item  # (text, url[, is_gif])
         self.index = -1  # 由网格基类填充，用于定位查看器初始图片
+        self._last_pixmap = None
+        self._movie = None
         self.setFixedWidth(104)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -201,6 +260,11 @@ class EmojiCard(_SpinnerMixin, QWidget):
             self.textLabel.hide()
         layout.addWidget(self.textLabel, 0, Qt.AlignmentFlag.AlignHCenter)
 
+        # 「GIF」角标：图标区左下角（这张卡没有勾选框 / 已下载徽标，四角随便挑）
+        self._init_gif_badge(self.is_gif, self.iconLabel)
+        if self.is_gif:
+            self.setToolTip("悬停播放动图")
+
         self._init_spinner()
 
     def set_cell(self, size: QSize) -> None:
@@ -209,10 +273,13 @@ class EmojiCard(_SpinnerMixin, QWidget):
         icon = max(24, size.width() - 8)
         self.iconLabel.setFixedSize(icon, icon)
         self.textLabel.setFixedWidth(size.width() - 8)
+        # 播放中改尺寸的话 movie 的 scaledSize 已过期，停掉等下次悬浮重来
+        self._stop_movie()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._center_spinner(self.iconLabel.geometry())
+        self._pin_gif_badge()
 
     def set_selectable(self, selectable: bool) -> None:
         """契约占位：表情不支持多选。"""
@@ -225,13 +292,68 @@ class EmojiCard(_SpinnerMixin, QWidget):
 
     def set_pixmap(self, pixmap) -> None:
         self.thumb_done()
+        self._last_pixmap = pixmap
+        self._apply_static()
+
+    def _apply_static(self) -> None:
+        pm = self._last_pixmap
+        if pm is None or pm.isNull():
+            return
         self.iconLabel.setPixmap(
-            pixmap.scaled(
+            pm.scaled(
                 self.iconLabel.size(),
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
         )
+
+    # ---- 悬浮播放 ----
+
+    def enterEvent(self, event) -> None:
+        super().enterEvent(event)
+        self._start_movie()
+
+    def leaveEvent(self, event) -> None:
+        super().leaveEvent(event)
+        # 鼠标移到子控件上时父控件也会收到 leaveEvent，得确认真的离开了整张卡
+        if not self.rect().contains(self.mapFromGlobal(QCursor.pos())):
+            self._stop_movie()
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        self._stop_movie()
+
+    def _start_movie(self) -> None:
+        if not self.is_gif or self._movie is not None:
+            return
+        movie = movie_from_cache(self.url, self)  # 字节没落盘就返回 None，静默不播
+        if movie is None:
+            return
+        movie.setScaledSize(self._movie_size(movie))
+        movie.frameChanged.connect(self._on_frame)
+        self._movie = movie
+        movie.start()
+
+    def _movie_size(self, movie) -> QSize:
+        """按图标区等比缩放动图（QMovie 自身不做 KeepAspectRatio）。"""
+        box = self.iconLabel.size()
+        frame = movie.currentImage().size()
+        if frame.isEmpty():
+            return box
+        return frame.scaled(box, Qt.AspectRatioMode.KeepAspectRatio)
+
+    def _on_frame(self) -> None:
+        if self._movie is not None:
+            self.iconLabel.setPixmap(self._movie.currentPixmap())
+
+    def _stop_movie(self) -> None:
+        movie = self._movie
+        if movie is None:
+            return
+        self._movie = None
+        movie.stop()
+        movie.deleteLater()
+        self._apply_static()
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -240,7 +362,7 @@ class EmojiCard(_SpinnerMixin, QWidget):
         super().mousePressEvent(event)
 
 
-class PackageCard(_SpinnerMixin, QWidget):
+class PackageCard(_GifBadgeMixin, _SpinnerMixin, QWidget):
     """表情包卡片：图片按钮（撑满）+ 居中文字 + 右上角勾选框 + 选中背景。
 
     用布局自适应单元格尺寸；图片用 QPushButton(setFlat=True) 点击整图触发勾选；
@@ -303,6 +425,10 @@ class PackageCard(_SpinnerMixin, QWidget):
         self.downloadedBadge = InfoBadge.success("已下载", self)
         self.downloadedBadge.setVisible(self._downloaded)
 
+        # 「GIF」角标：图片区左下角。左上是勾选框、右上是「已下载」，四角各归各位。
+        # 判定走数据字段（meta.label_text / 任一 em.gif_url），不必等封面下载完
+        self._init_gif_badge(package_has_gif(pkg), self.imageBtn)
+
         self._accent = ThemeColor.PRIMARY.color()
         self._apply_bg(False)
         bind_theme(self, self._apply_theme)
@@ -336,6 +462,7 @@ class PackageCard(_SpinnerMixin, QWidget):
         super().resizeEvent(event)
         self._pin_checkbox()
         self._pin_badge()
+        self._pin_gif_badge()
         self._center_spinner(self.imageBtn.geometry())
         self._apply_pixmap()
 
@@ -680,7 +807,7 @@ class EmojiGrid(_CardGridBase):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._items: list[tuple[str, str]] = []
+        self._items: list[tuple[str, str, bool]] = []
         self.itemClickedAt.connect(self._emit_image)
 
     @staticmethod
@@ -696,13 +823,21 @@ class EmojiGrid(_CardGridBase):
         w = max(self._min_cell.width(), (vw - _CARD_GUTTER) // n)
         return QSize(w, w + 36)
 
-    def items(self) -> list[tuple[str, str]]:
-        """实际建卡的 (text, url) 列表（已过滤空 url），与 imageClicked 索引一致。"""
+    def items(self) -> list[tuple]:
+        """实际建卡的 (text, url, is_gif) 列表（已过滤空 url），与 imageClicked 索引一致。"""
         return list(self._items)
 
     def set_emotes(self, items) -> None:
-        """items: [(text, url), ...]。url 为 None/空的行被跳过，不报错。"""
-        self._items = [(text or "", url) for text, url in items if url]
+        """items: [(text, url[, is_gif]), ...]。url 为 None/空的行被跳过，不报错。
+
+        第三位是「这张是不是动图」（来自 `em.gif_url`），驱动卡片的 GIF 徽标与悬浮播放；
+        缺省视作静态图，老的两元组调用照旧能用。
+        """
+        self._items = [
+            (it[0] or "", it[1], bool(it[2]) if len(it) > 2 else False)
+            for it in items
+            if it[1]
+        ]
         self.set_cards(self._items)
 
     def _emit_image(self, index: int, _card) -> None:

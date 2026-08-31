@@ -61,10 +61,10 @@ got: list[int] = []
 grid.imageClicked.connect(got.append)
 
 check(grid.items() == [
-    ("a", "https://x.invalid/a.png"),
-    ("b", "https://x.invalid/b.png"),
-    ("dup", "https://x.invalid/a.png"),
-], f"items() 已过滤空 url（实际 {grid.items()}）")
+    ("a", "https://x.invalid/a.png", False),
+    ("b", "https://x.invalid/b.png", False),
+    ("dup", "https://x.invalid/a.png", False),
+], f"items() 已过滤空 url、第三位补出 is_gif（实际 {grid.items()}）")
 check(grid.count() == 3, f"建了 3 张卡（实际 {grid.count()}）")
 
 for i in range(grid.count()):

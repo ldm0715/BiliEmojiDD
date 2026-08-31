@@ -5,13 +5,14 @@
 图片加载复用 thumb_manager + signal_bus.thumbLoaded（详情页给的 URL 本身就是原图，
 全尺寸 QPixmap 已缓存在 QPixmapCache，命中即刻返回、未命中自动走后台线程池）。
 
-已知限制：GIF 只显示首帧。FlipView 存的是 QImage，动图需要 QMovie，其 delegate 不支持；
-与网格缩略图观感一致（网格本来也是首帧静图）。
+动图：items 第三位标了 GIF 的项**打开即自动播放** —— FlipView 存的是 QImage、delegate 不认
+QMovie，所以自己驱一个 QMovie（字节来自 `image_cache`，见 `app/components/gif.py`），
+每帧 letterbox 合成后 setItemImage 顶回去。只播当前那一项，翻页即换。
 """
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QAction, QColor, QImage, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QImage, QPainter, QPixmap, QPixmapCache
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     CaptionLabel,
@@ -28,6 +29,7 @@ from qfluentwidgets import (
 from qfluentwidgets.components.dialog_box.mask_dialog_base import MaskDialogBase
 
 from app.common.signal_bus import signal_bus
+from app.components.gif import movie_from_cache
 from app.components.thumb import thumb_manager
 
 _MAX_W = 900
@@ -166,6 +168,8 @@ class ImageViewer(MaskDialogBase):
         self._items = list(items)
         self._syncing = False
         self._requested: set[str] = set()
+        self._movie = None
+        self._movie_index = -1
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         # setMaskColor 有上游 bug：rgba(red, blue, green, alpha) —— B/G 写反了。
         # 用纯黑正好绕过（R=G=B=0），不要改成其他彩色遮罩。
@@ -246,6 +250,55 @@ class ImageViewer(MaskDialogBase):
         # 而 addImages 已把 _currentIndex 置为 0 → 初始 index 为 0 时须手动同步一次
         self._sync_ui(index)
         self._prefetch(index)
+        self._start_movie(index)
+
+    # ---- 动图播放 ----
+
+    def _is_gif(self, index: int) -> bool:
+        if not (0 <= index < len(self._items)):
+            return False
+        item = self._items[index]
+        return bool(item[2]) if len(item) > 2 else False
+
+    def _start_movie(self, index: int) -> None:
+        """当前项是动图且字节已落盘 → 起一个 QMovie，逐帧顶进 FlipView。"""
+        if self._movie_index == index and self._movie is not None:
+            return
+        self._stop_movie()
+        if not self._is_gif(index):
+            return
+        movie = movie_from_cache(self._items[index][1], self)
+        if movie is None:  # 还没下完 / 缓存已淘汰：_on_thumb 到货时再试一次
+            return
+        self._movie = movie
+        self._movie_index = index
+        movie.frameChanged.connect(self._on_movie_frame)
+        movie.start()
+
+    def _on_movie_frame(self) -> None:
+        if self._movie is None:
+            return
+        self.flipView.setItemImage(
+            self._movie_index,
+            _letterbox(self._movie.currentPixmap(), self._item_size, self._dpr),
+        )
+
+    def _stop_movie(self) -> None:
+        movie = self._movie
+        if movie is None:
+            return
+        index = self._movie_index
+        self._movie = None
+        self._movie_index = -1
+        movie.stop()
+        movie.deleteLater()
+        # 退回静态首帧：翻走的那一页不该停在动图的随机某帧
+        url = self._items[index][1] if 0 <= index < len(self._items) else None
+        cached = QPixmap()
+        if url and QPixmapCache.find(url, cached):
+            self.flipView.setItemImage(
+                index, _letterbox(cached, self._item_size, self._dpr)
+            )
 
     # ---- 图片加载 ----
 
@@ -261,14 +314,17 @@ class ImageViewer(MaskDialogBase):
 
     def _on_thumb(self, url: str, pixmap) -> None:
         image = None
-        for i, (_, item_url) in enumerate(self._items):
-            if item_url != url:
+        for i, item in enumerate(self._items):
+            if item[1] != url:
                 continue
             if image is None:  # 同一 URL 多处复用时只合成一次
                 image = _letterbox(pixmap, self._item_size, self._dpr)
             self.flipView.setItemImage(i, image)
+        # 字节刚落盘：当前项若是动图，这时才真的播得起来
+        self._start_movie(self.flipView.currentIndex())
 
     def _on_finished(self) -> None:
+        self._stop_movie()  # 别让 movie 活过 dialog
         try:
             signal_bus.thumbLoaded.disconnect(self._on_thumb)
         except (RuntimeError, TypeError):
@@ -279,6 +335,7 @@ class ImageViewer(MaskDialogBase):
     def _on_index_changed(self, index: int) -> None:
         self._sync_ui(index)
         self._prefetch(index)
+        self._start_movie(index)
 
     def _sync_ui(self, index: int) -> None:
         if self._syncing:
@@ -316,6 +373,7 @@ class ImageViewer(MaskDialogBase):
         if not url:
             return
         # 先退回占位图给个「正在重来」的反馈；回填照走 _on_thumb（按 url 匹配）
+        self._stop_movie()  # 旧 movie 的字节马上要被作废
         self.flipView.setItemImage(index, _placeholder(self._item_size, self._dpr))
         self._requested.add(url)
         thumb_manager.reload(url)

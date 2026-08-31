@@ -122,7 +122,8 @@ class PackageDetailView(QWidget):
         for em in pkg.emote:
             url = em.gif_url or em.url
             if url:
-                items.append((em.text or "", url))
+                # 第三位驱动网格的 GIF 徽标与悬浮播放，口径与这里取 url 的口径一致
+                items.append((em.text or "", url, bool(em.gif_url)))
         self.grid.set_emotes(items)
         # GIF 选项按「包里真的有没有 gif_url」显隐：pkg.is_gif 只看 meta.label_text，
         # 与 download_package_batch 里 `if use_gif and em.gif_url` 的实际取用不同步
