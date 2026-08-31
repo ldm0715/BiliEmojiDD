@@ -38,12 +38,25 @@ def main() -> int:
     # 而给 qfluentwidgets 打的 getFont 补丁要赶在页面控件构造之前生效
     apply_app_font(app)
 
+    app.setWindowIcon(app_icon())  # 任务栏 / 弹窗继承应用图标
+    # setTheme 提到开屏面板之前：开屏也要跟随亮 / 暗主题，不然启动瞬间会闪一下白
+    setTheme(cfg.theme.value)
+
+    # 开屏面板：下面 import + 构造窗口要好几秒，期间屏幕全黑，容易被当成没启动。
+    # 它只依赖 config / resource / theme，不碰任何页面模块——否则等于把要遮的
+    # 开销提到了开屏之前。
+    from app.components.splash import SplashWindow
+
+    splash = SplashWindow()
+    splash.start()
+
+    splash.set_message("正在加载界面组件…")
     from app.MainWindow import MainWindow
 
-    app.setWindowIcon(app_icon())  # 任务栏 / 弹窗继承应用图标
-    setTheme(cfg.theme.value)
-    window = MainWindow()
+    # 构造期间没有事件循环，进度只能由 MainWindow 主动回调（同步 repaint）
+    window = MainWindow(on_progress=splash.set_message)
     window.show()
+    splash.finish(window)
     return app.exec()
 
 

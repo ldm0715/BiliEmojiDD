@@ -1,6 +1,8 @@
 """主窗口：FluentWindow 导航 + 侧栏主题切换 + 关闭窗口时的下载保护。"""
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import QAbstractAnimation, QTimer
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QStackedWidget
@@ -43,18 +45,30 @@ _AUTO_CHECK_DELAY = 3000
 
 
 class MainWindow(FluentWindow):
-    def __init__(self) -> None:
+    def __init__(self, on_progress: Callable[[str], None] | None = None) -> None:
+        """`on_progress` 是开屏面板的进度回调（`SplashWindow.set_message`）。
+
+        五个页面同步构造要好几秒，这期间没有事件循环，开屏面板只能靠这里主动
+        回调来换文案 + 同步重绘。不传就是静默构造（屏幕外脚本、测试都这么用）。
+        """
         super().__init__()
+        report = on_progress or (lambda _text: None)
         self.navigationInterface.setExpandWidth(150)  # 侧栏展开宽度（默认 322）
         # 标题栏返回按钮走 qrouter.pop() → stacked.setCurrentWidget，不经 switchTo，
         # 所以直接换掉实例上的方法，三个切页入口统一无动画（见 _set_current_interface）
         self.stackedWidget.setCurrentWidget = self._set_current_interface
+        report("正在准备主页…")
         self.homePage = HomePage(self)
+        report("正在准备表情包页…")
         self.emojiPage = EmojiPage(self)
+        report("正在准备收藏集页…")
         self.dressPage = DressPage(self)
+        report("正在准备下载页…")
         self.downloadPage = DownloadPage(self)
+        report("正在准备设置页…")
         self.settingPage = SettingPage(self)
 
+        report("正在装配窗口…")
         self.initNavigation()
         self.initWindow()
         if cfg.auto_check_update.value:

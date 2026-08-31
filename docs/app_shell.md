@@ -1,4 +1,4 @@
-# 应用外壳：全局字体 / 字体渲染 / 消息提示位置 / 切页无动画
+# 应用外壳：全局字体 / 字体渲染 / 消息提示位置 / 切页无动画 / 开屏面板
 
 四件跨页面的「壳」层改动，都不属于任何单个功能页。
 
@@ -184,7 +184,81 @@ os.environ["QT_QPA_PLATFORM"] = "windows:fontengine=freetype"
 
 ---
 
+## 五、开屏面板（启动前几秒不再是黑屏）
+
+### 为什么要有
+
+冷启动实测（本机，`uv run python main.py` 的各阶段计时）：
+
+| 阶段 | 耗时 |
+|---|---|
+| `import PySide6.QtWidgets` | ~370 ms |
+| `QApplication()` | ~70 ms |
+| `import qfluentwidgets` | ~520 ms |
+| `apply_app_font()` | ~150 ms |
+| **`import app.MainWindow`** | **~2100 ms** |
+| **`MainWindow()`（五个页面同步构造）** | **~2700 ms** |
+
+后两项占八成。这几秒里屏幕上什么都没有，用户会以为程序没起来（真实反馈）。
+
+### 为什么不用上游的 `SplashScreen`
+
+`qfluentwidgets.window.splash_screen.SplashScreen` **不合用**：
+
+- 它必须挂在一个**已经存在的** `FluentWindow` 上（构造里 `parent.installEventFilter`，
+  `eventFilter` 跟着父窗口 resize）——而我们要遮的恰恰是「MainWindow 还没造出来」那一段；
+- 它只画一个居中图标 + 一条 `TitleBar`，没有应用名与版本号。
+
+所以自己写了 `app/components/splash.py::SplashWindow`：独立顶层窗口
+（`Qt.SplashScreen | FramelessWindowHint | WindowStaysOnTopHint` + `WA_TranslucentBackground`
++ 自绘圆角卡片底），内容是 图标 / `BiliEmojiDD` / 版本胶囊 / 进度文案。
+版本号走 `APP_VERSION`（`pyproject.toml` 那个唯一来源），**发版不用改这里**。
+
+### 时序（`main.py`）
+
+```python
+apply_font_engine()            # 必须最早：平台插件启动参数
+app = QApplication(sys.argv)
+apply_app_font(app)            # 必须早于 import MainWindow：getFont 补丁
+app.setWindowIcon(app_icon())
+setTheme(cfg.theme.value)      # 提到 splash 之前，开屏才跟随亮/暗主题
+splash = SplashWindow(); splash.start()
+splash.set_message("正在加载界面组件…")
+from app.MainWindow import MainWindow          # ← 大头之一
+window = MainWindow(on_progress=splash.set_message)   # ← 大头之二，逐页报进度
+window.show(); splash.finish(window)
+```
+
+三条硬约束：
+
+- **splash 只能 import `config` / `resource` / `theme` / `page_scaffold`**，
+  绝不碰 `app.view.*` 或 `app.MainWindow`——否则等于把要遮的开销提到了开屏之前。
+  `check_splash.py` 用 `ast` 解析 import 语句做回归断言（不能用「源码里有没有这个词」判，
+  docstring 里就会提到 MainWindow）。
+- **进度更新走 `repaint()` 不走 `processEvents()`**。构造 `MainWindow` 期间没有事件循环，
+  `processEvents()` 会在页面半构造好的时候重入事件派发。只有 `start()` 里那一次
+  `processEvents` 是安全的——那时 MainWindow 还不存在。
+- **不做动画**。没有事件循环，转圈会僵在某一帧，看着更像卡死；分阶段换文案已经够了。
+
+### 进度文案被挤成一条（踩过）
+
+`QVBoxLayout.setAlignment(Qt.AlignHCenter)` 会让**每个子项只拿到自己的 sizeHint 宽度**，
+而 `wordWrap` 的 `QLabel` 的 sizeHint 宽度很窄 → 文案被压成细长一条、折了好几行还看不清。
+
+修法：整个布局**不设**对齐，居中交给每个子项自己的对齐标志；需要铺满整行的
+`messageLabel` 则 `addWidget(label)` **不带**对齐标志。另外把它
+`setFixedHeight(两行)`，否则每换一次文案整块布局都要重排、面板会抖。
+（与「有 QSS 的控件 `setContentsMargins` 会被忽略」是同一类问题：
+**带对齐标志的布局项不会被拉伸**，设置页的代理地址框也踩过，见 `setting_page_redesign.md`。）
+
+---
+
 ## 回归断言
+
+`scripts/check_splash.py` 覆盖：面板内容（图标 / 品牌名 / 版本号 / 进度文案）与居中位置、
+`set_message` 可反复更新、**进度文案铺满可用宽度且最长文案单行放得下**、`finish()` 后不可见、
+亮暗两主题各构造一次不崩、**splash 不 import 页面 / 主窗口 / biliemoji**、
+`MainWindow.__init__` 收 `on_progress` 且构造五页时真的逐次回调。
 
 `scripts/check_shell.py`（`QT_QPA_PLATFORM=offscreen`）覆盖五件事：
 字体加载（含「首选族名而不是文件名排序第一个」）、`getFont` 补丁生效（含 `label.py`
