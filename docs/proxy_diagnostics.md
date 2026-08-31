@@ -67,10 +67,40 @@
 ### 2. 代理开关 + 单地址框
 
 配置项 `proxy_enabled`（`ConfigItem("Download", "proxyEnabled", False, BoolValidator())`），
-**默认关**。老配置迁移：`config.py::_migrate_proxy_enabled()` 在 `qconfig.load` 之后读一次
-JSON，若 `Download` 段里**没有** `proxyEnabled` 键而 `proxy` 非空，则置 True——
-以前填过代理的人升级后不会突然断网。只认「键不存在」这一种情况，用户自己关掉开关后
-键就存在了，不会被地址非空翻回来。
+**默认关**。老配置迁移：`config.py::_migrate()` 在 `qconfig.load` 之后读一次 JSON，
+若 `Download` 段里**没有** `proxyEnabled` 键而 `proxy` 非空，则置 True——
+以前填过代理的人升级后不会突然断网。
+
+#### 迁移必须靠显式 schema 标记熄火（真实报障）
+
+用户反馈「好几次明明关了代理，重开又是开的」。排查下来，写盘路径本身是通的
+（开关 `checkedChanged` → `qconfig.set` → 内部直接 `save()`，没有延迟定时器），
+问题出在迁移的**熄火条件**上。初版是：
+
+```python
+if "proxyEnabled" not in download and cfg.proxy.value:
+    qconfig.set(cfg.proxy_enabled, True)     # ← 指望「写完盘键就存在了」来自我熄火
+```
+
+但 `qconfig.set` 在**值没变化时直接 return、根本不落盘**（上游 `config.py:299`）。
+于是只要出现一次「内存里已经是 True 而文件里仍没有 `proxyEnabled` 键」，
+这段迁移就**永远处于武装状态**，那个键永远补不上；此后任何一次配置回落到默认值
+——`qconfig.load` 被 `@exceptionHandler` 静默吞掉的解析失败、文件被外部改坏 / 清空、
+换安装目录——都会在下次启动被它把用户明确关掉的开关重新翻成「开」。
+
+现在两处加固：
+
+1. **`schema_version`（`ConfigItem("App", "schema", 0)`）**：迁移只在
+   `schema < CONFIG_SCHEMA` 时跑，跑完置位。迁移本身**只改内存**，不再自己调
+   `qconfig.set`——熄火与落盘解耦。
+2. **`_ensure_persisted()`**：`qconfig.load` 之后比一次「文件原文 vs `qconfig.toDict()`」，
+   不一致就 `qconfig.save()` 补全。`toDict()` 本来就 dump 全部字段，只是从来没有人在启动时
+   触发它——新加的配置项在用户主动改动它之前，文件里一直缺席，迁移判据也就一直读到
+   「键不存在」。首次运行 / 新增字段 / 文件被改坏之后各写一次，之后自然收敛。
+
+回归断言在 `scripts/check_proxy_hint.py` 第 7 节（开子进程按三种初始 config.json 各起一次
+配置模块）：老配置置开且落盘、用户关掉的开关重启仍是关的、
+**schema 已就位但键缺失时不再迁移**（旧写法在这一条会翻成 True）。
 
 设置页代理行三个控件：`SwitchButton` + `LineEdit` + 「测试」。
 **开关关着时地址框与测试按钮都 disable**（`_sync_proxy_enabled`）——「没开代理」这件事

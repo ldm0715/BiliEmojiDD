@@ -58,10 +58,15 @@ GH_MIRROR_CHAIN = tuple(v for v in GH_MIRROR_VALUES if v.startswith("http"))
 # 只有这两项：Qt 6.4.2 的 Windows 插件不认 `fontengine=gdi`（实测输出与默认逐像素相同）。
 FONT_ENGINES = ("default", "freetype")
 
+# 配置结构版本：一次性迁移靠它熄火（见 _migrate）。加新迁移时 +1。
+CONFIG_SCHEMA = 1
+
 
 class AppConfig(QConfig):
     """应用配置。所有字段为可序列化的基本类型。"""
 
+    # 配置结构版本，只给迁移用，界面上不出现
+    schema_version = ConfigItem("App", "schema", 0)
     cookie = ConfigItem("Account", "cookie", "")
     download_dir = ConfigItem(
         "Download", "dir", str(Path.home() / "Downloads" / "biliemoji")
@@ -102,19 +107,47 @@ qconfig.load(str(CONFIG_FILE), cfg)
 qconfig.set(qconfig.themeMode, cfg.theme.value, save=False)
 
 
-def _migrate_proxy_enabled() -> None:
-    """代理开关是后加的：老配置里填过代理地址的，视为「已启用」。
-
-    只认「配置文件里压根没有 proxyEnabled 这个键」这一种情况——用户自己关掉开关后
-    键就存在了，不能再被地址非空翻回来。文件缺失 / 损坏都静默跳过（走默认值 False）。
-    """
+def _raw_config() -> dict:
+    """磁盘上的配置原文。缺失 / 损坏都当作空——不该让应用起不来。"""
     try:
         raw = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        download = raw.get("Download", {})
-    except Exception:  # noqa: BLE001 首次运行没有文件；损坏也不该让应用起不来
+    except Exception:  # noqa: BLE001 首次运行没有文件；损坏也照样走默认值
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _migrate(raw: dict) -> None:
+    """一次性迁移。**只改内存**，落盘统一交给 `_ensure_persisted`。
+
+    代理开关是后加的：老配置里填过代理地址的，视为「已启用」（升级不断网）。
+
+    熄火靠 `schema_version` 这个显式标记，**不能靠「写完盘那个键就存在了」**——
+    `qconfig.set` 在值没变化时直接 return、根本不落盘（上游 `config.py:299`）。
+    于是一旦出现「内存里已经是 True 而文件里仍没有 proxyEnabled 键」，旧写法就
+    永远处于武装状态：此后任何一次配置回落到默认值（`qconfig.load` 被
+    `@exceptionHandler` 静默吞掉的解析失败、文件被外部改坏 / 清空、换安装目录）
+    都会在下次启动被它把用户明确关掉的开关重新翻成「开」。真实报障就是这条。
+    """
+    if cfg.schema_version.value >= CONFIG_SCHEMA:
         return
+    download = raw.get("Download")
     if isinstance(download, dict) and "proxyEnabled" not in download and cfg.proxy.value:
-        qconfig.set(cfg.proxy_enabled, True)
+        cfg.proxy_enabled.value = True
+    cfg.schema_version.value = CONFIG_SCHEMA
 
 
-_migrate_proxy_enabled()
+def _ensure_persisted(raw: dict) -> None:
+    """让磁盘上的配置始终是**全量**的。
+
+    `QConfig.toDict()` 本来就 dump 全部字段，只是从来没有人在启动时触发它——
+    于是新加的配置项在用户主动改动它之前，文件里一直缺席，迁移判据也就一直读到
+    「键不存在」。这里比一次原文与内存快照，不一致就补写（首次运行、新增字段、
+    文件被改坏之后各写一次），之后自然收敛，不会每次启动都写。
+    """
+    if raw != qconfig.toDict():
+        qconfig.save()
+
+
+_raw = _raw_config()
+_migrate(_raw)
+_ensure_persisted(_raw)

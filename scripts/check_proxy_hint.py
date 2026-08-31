@@ -8,13 +8,16 @@
 5. 设置页：开关关着地址框不可编辑、`_current_proxy()` 的规范化与拦截；
 5b. **代理即时生效**（改完不必点「保存下载设置」）+ 副标题显示生效值；
 5c. 「测试」失败提示报的是被测地址与接口，不是 `cfg.proxy`；
-6. `cause_hint` 仍能沿异常链认出常见代理故障。
+6. `cause_hint` 仍能沿异常链认出常见代理故障；
+7. **`proxyEnabled` 迁移只跑一次**——用户关掉的开关不会在下次启动被翻回「开」。
 
 用法：QT_QPA_PLATFORM=offscreen uv run python scripts/check_proxy_hint.py
 """
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -303,6 +306,58 @@ check(
 
 cfg.proxy_enabled.value = False
 cfg.proxy.value = ""
+
+# ---------------------------------------------------------------- 7. 配置迁移
+print("\n[7] proxyEnabled 迁移只跑一次（关掉的开关不会被翻回来）")
+
+# 迁移在 import app.common.config 时就跑完了，只能开子进程按不同的初始文件重来。
+_PROBE = (
+    "from app.common.config import cfg, CONFIG_FILE;"
+    "import json;"
+    "raw = json.loads(CONFIG_FILE.read_text(encoding='utf-8'));"
+    "print('RESULT', cfg.proxy_enabled.value,"
+    " raw['Download'].get('proxyEnabled'), cfg.schema_version.value)"
+)
+
+
+def _boot_with(raw: dict) -> tuple[str, str, str]:
+    """用给定的 config.json 起一次配置模块，返回 (内存值, 落盘值, schema)。"""
+    home = Path(tempfile.mkdtemp(prefix="biliEmojiDD-migrate-")) / "biliEmojiDD"
+    home.mkdir(parents=True)
+    (home / "config.json").write_text(json.dumps(raw), encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, "-c", _PROBE],
+        check=False,  # 子进程崩了要能报出来，不能直接抛
+        cwd=str(Path(__file__).resolve().parent.parent),
+        env={**os.environ, "APPDATA": str(home.parent), "PYTHONIOENCODING": "utf-8"},
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    for line in result.stdout.splitlines():
+        if line.startswith("RESULT"):
+            _, memory, on_disk, schema = line.split()
+            return memory, on_disk, schema
+    return "CRASH", (result.stderr or "")[-200:], "?"
+
+
+ADDRESS = {"proxy": "http://127.0.0.1:7890"}
+
+memory, on_disk, schema = _boot_with({"Download": dict(ADDRESS)})
+check(memory == "True", "老配置（有地址、无 proxyEnabled 键）迁移置开")
+check(on_disk == "True", "迁移结果确实落了盘，不只是改了内存")
+check(schema == "1", "迁移完成后 schema 标记就位")
+
+memory, on_disk, _ = _boot_with(
+    {"App": {"schema": 1}, "Download": {**ADDRESS, "proxyEnabled": False}}
+)
+check(memory == "False", "用户关掉的开关，重启后仍是关的")
+
+# 回归：schema 已就位但键缺失（文件被改坏 / 清过）。旧写法在这里会翻成 True——
+# 因为它靠「写完盘键就存在」熄火，而 qconfig.set 值没变时压根不落盘。
+memory, on_disk, _ = _boot_with({"App": {"schema": 1}, "Download": dict(ADDRESS)})
+check(memory == "False", "schema 已就位时不再迁移（键缺失也不翻回开）")
+check(on_disk == "False", "缺失的键被补写进文件，下次不会再当成老配置")
 
 print()
 if FAILS:
