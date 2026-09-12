@@ -40,7 +40,7 @@ from qfluentwidgets import ExpandSettingCard, SettingCard, SettingCardGroup, qco
 from app.common.config import APP_NAME, GH_MIRROR_CHAIN, cfg
 from app.common.net import make_session
 from app.common.version import is_newer, parse_version, project_version
-from app.components import updater
+from app.components import cookie_status, updater
 from app.components.update_dialog import UpdateDialog
 from app.components.updater import (
     LATENCY_GOOD_MS,
@@ -470,6 +470,8 @@ print("== 10. 版本号胶囊 ==")
 from qfluentwidgets import InfoBadge
 
 from app.view.home_page import HomePage
+
+cookie_status.set_enabled(False)  # 主页 showEvent 会触发一次 Cookie 检测
 
 home = HomePage()
 home.resize(900, 700)

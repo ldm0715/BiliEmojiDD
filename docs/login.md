@@ -154,7 +154,21 @@ UA 版本档位与 biliemoji 内部的 UA 池保持一致，免得同一账号�
 
 ⚠️ 喂图必须**把控件尺寸钉回去**，见下面坑点清单第一条 —— 这是本项目里最容易漏的一处。
 
-## 八、坑点清单
+## 八、登录之后：这个 Cookie 还有效吗
+
+扫码成功只说明「那一刻」可用。`SESSDATA` 会自己过期，也可能在别处退出登录后被吊销。
+「现在还灵不灵」这件事由 `app/components/cookie_status.py` 统一管，本文件只负责**拿到** Cookie：
+
+- 探针就是这里的 `fetch_account()`（打 `nav`）—— 返回 `Account` = 有效、返回 `None` =
+  失效、抛异常 = 不知道（**网络不通不判失效**）；
+- 主页英雄卡的状态灯读它（有效绿 / 失效红 / 未配置橙），进主页时按需检测一次；
+- 结论有信任期（有效 7 天、失效 30 分钟），期内进主页一个请求都不发；
+- 设置页三条路都并进同一份记录：`_apply_cookie`（保存 / 扫码 / 退出）**无条件作废**，
+  `_on_account`（那次 nav 的结果）给出结论，「验证」成功只提升为有效。
+
+完整推导、配色与踩坑见 [cookie_status.md](cookie_status.md)。
+
+## 九、坑点清单
 
 - **`ImageLabel.setImage` 会把控件尺寸改成图片尺寸**（上游 `label.py:300` 无条件
   `setFixedSize(self.image.size())`），而 `AvatarWidget` 的整套绘制都建立在
@@ -187,11 +201,12 @@ UA 版本档位与 biliemoji 内部的 UA 池保持一致，免得同一账号�
 - **`qconfig.set` 的值没变时不落盘**（上游行为）：`_apply_cookie` 里"值变了才清账号信息"
   的判断就是靠这个语义 —— 值没变说明还是同一个号，不该把昵称清掉。
 
-## 九、验证
+## 十、验证
 
 ```bash
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_login.py       # 扫码登录专项
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_setting_page.py # 设置页版式（新增账号卡）
+QT_QPA_PLATFORM=offscreen uv run python scripts/check_cookie_status.py # 登录之后的 Cookie 状态
 ```
 
 `check_login.py` 覆盖：状态码映射、Cookie 双路径拼装（含「不解码」）、
@@ -201,7 +216,7 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/check_setting_page.py # 设置�
 **真机扫码没法自动化** —— 手机扫屏幕那一步得人工跑一次 `uv run python main.py`，
 确认能扫出来、文案按「未扫码 → 已扫码 → 成功」走、昵称头像显示正确。
 
-## 十、接口失效了怎么办
+## 十一、接口失效了怎么办
 
 这套接口**不是 B 站官方公开 API**，是社区逆向记录（bilibili-API-collect）。B 站改动后
 表现通常是：`generate` 直接返回错误、`poll` 一直 `86101`、或者能登录但 Cookie 不认。

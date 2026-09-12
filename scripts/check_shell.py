@@ -164,13 +164,14 @@ cfg.font_engine.value = "default"
 
 print("== 3. 消息提示挂在内容区 ==")
 from app.common.notify import _resolve_parent, notify_info, notify_success
-from app.components import updater
+from app.components import cookie_status, updater
 from app.components.content_meta import content_meta
 from app.components.video_cache import video_cache
 
 content_meta.set_enabled(False)
 video_cache.set_enabled(False)
 updater.set_enabled(False)  # MainWindow 启动后会静默查一次新版本
+cookie_status.set_enabled(False)  # 主页 showEvent 会触发一次 Cookie 检测
 
 from app.MainWindow import MainWindow
 

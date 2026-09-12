@@ -1,12 +1,17 @@
-"""表情包页：Pivot 两个标签（按 ID 查询 / 全部表情包）。
+"""表情包页：Pivot 两个标签（全部表情包 / 按 ID 查询）。
 
 两级导航：先展示表情包（大类）卡片列表，点击进入包详情查看全部表情并下载。
 「全部表情包」列表使用分页，避免一次性加载太多。
+
+「全部表情包」放**第一个标签且是默认页**：它才是这页的主体，而「按 ID 查询」
+在没输入 ID 时是片空白。Cookie 确认有效后 `MainWindow` 会调
+`ensure_all_packages()` 静默预拉取（不切页），用户进来时列表已经就绪。
 """
 from __future__ import annotations
 
 import math
 
+from biliemoji import AuthRequired
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -31,7 +36,7 @@ from app.common.exception import show_bili_error
 from app.common.net import make_emoji
 from app.common.notify import notify_info, notify_success, notify_warning
 from app.common.theme import SECONDARY_TEXT
-from app.components import api_cache
+from app.components import api_cache, cookie_status
 from app.components.cache import load_all_packages_cache, save_all_packages_cache
 from app.components.download_queue import download_queue
 from app.components.package_detail import PackageDetailView
@@ -128,6 +133,9 @@ class _AllPackagesTab(QWidget):
         self._all: tuple = ()
         self._filtered: list = []
         self._multi = False
+        # 正在拉全量。预拉取那条路径上没有按钮可以关，只能靠这个标志防重复请求；
+        # 清它必须挂在 on_finished 上（见 _on_request_finished）
+        self._loading = False
 
         self.stacked = QStackedWidget(self)
         self.listPage = QWidget(self)
@@ -178,6 +186,7 @@ class _AllPackagesTab(QWidget):
 
         只有已经拉过全量列表时才真的过滤——没拉过就悄悄发起一次需要 Cookie 的
         网络请求太突兀，先把词填好，用户点「拉取全部表情包」后自然生效。
+        （Cookie 有效时全量已被预拉取，所以这条通常都会真的过滤。）
         """
         self.filterEdit.setText(keyword)
         if self._all:
@@ -257,23 +266,44 @@ class _AllPackagesTab(QWidget):
         )
 
     def _on_fetch(self) -> None:
+        """按钮路径：允许用本地缓存，命中时给一条提示。"""
+        self._load(silent=False)
+
+    def ensure_loaded(self) -> None:
+        """静默预拉取：Cookie 确认有效后由 `EmojiPage.ensure_all_packages()` 调。
+
+        幂等——「已经有数据」「正在拉」「根本没 Cookie」都直接返回。每次进主页
+        都会广播一次 Cookie 状态，这条路径被反复叫到很正常。
+
+        `silent=True` 不弹那条「已使用本地缓存」提示：它会在**每次启动**都糊
+        用户一脸，而用户此刻还在主页上，压根没点过任何东西。
+        """
+        if self._loading or self._all:
+            return
+        if not cfg.cookie.value.strip():
+            return
+        self._load(silent=True)
+
+    def _load(self, *, silent: bool) -> None:
         # 优先使用本地缓存，避免每次拉取都请求 B 站接口
         cookie = cfg.cookie.value
         cached = load_all_packages_cache(cookie)
         if cached:
             self._set_packages(cached)
             self.refreshBtn.setEnabled(True)
-            notify_info(
-                "已使用本地缓存",
-                f"共 {len(cached)} 个表情包（24 小时内有效，可「强制刷新」重新拉取）",
-                parent=self,
-                position=InfoBarPosition.TOP_RIGHT,
-                duration=4000,
-            )
+            if not silent:
+                notify_info(
+                    "已使用本地缓存",
+                    f"共 {len(cached)} 个表情包（24 小时内有效，可「强制刷新」重新拉取）",
+                    parent=self,
+                    position=InfoBarPosition.TOP_RIGHT,
+                    duration=4000,
+                )
             return
         self._request_all(cookie)
 
     def _request_all(self, cookie: str) -> None:
+        self._loading = True
         self.fetchBtn.setEnabled(False)
         self.refreshBtn.setEnabled(False)
 
@@ -283,14 +313,38 @@ class _AllPackagesTab(QWidget):
         run_task(
             task,
             on_success=self._on_fetched,
-            on_error=lambda e: show_bili_error(e, self),
-            on_finished=lambda ok: self.fetchBtn.setEnabled(True),
+            on_error=self._on_fetch_failed,
+            on_finished=self._on_request_finished,
         )
+
+    def _on_fetch_failed(self, exc) -> None:
+        """取数失败也可能是「Cookie 其实已经失效」。
+
+        信任期内的旧绿灯靠这条纠正：拉全量吃到 `AuthRequired` 就立即作废记录，
+        下次进主页的探针会让灯变红，而不是挂着 7 天的旧结论。
+        """
+        if isinstance(exc, AuthRequired):
+            cookie_status.invalidate()
+        show_bili_error(exc, self)
+
+    def _on_request_finished(self, _ok: bool) -> None:
+        """统一收尾。`_loading` **必须**在这里清：成功与两条异常路都会走
+        `on_finished`，只在成功路径清会让失败后的预拉取永远不再重试。
+
+        顺带修掉一个老毛病：`refreshBtn` 以前在失败后不会恢复，一旦某次拉取
+        失败它就永久禁用（它的语义是「有数据时绕过缓存重拉」，按有没有数据给）。
+        """
+        self._loading = False
+        self.fetchBtn.setEnabled(True)
+        self.refreshBtn.setEnabled(bool(self._all))
 
     def _on_fetched(self, packages) -> None:
         save_all_packages_cache(cfg.cookie.value, packages)
         self._set_packages(packages)
         self.refreshBtn.setEnabled(True)
+        # 「拉到了全量」本身就是 Cookie 可用的证据，并进同一份状态。**只提升
+        # 不降级**——判失效只由 nav 探针说了算（网络抖动不该把灯弄红）
+        cookie_status.note(cookie_status.VALID)
 
     def _on_refresh(self) -> None:
         # 强制重新拉取，覆盖旧缓存
@@ -357,17 +411,20 @@ class EmojiPage(QWidget):
         self.stackedWidget = QStackedWidget(self)
         self.idTab = _IdQueryTab(self)
         self.allTab = _AllPackagesTab(self)
-        self.stackedWidget.addWidget(self.idTab)
+        # 「全部表情包」在前且是默认页：它才是主体，而「按 ID 查询」没输入 ID 时
+        # 是片空白。默认项正好是 index 0，Pivot 指示条初始位置天然正确
+        # （未显示时程序化定位不可靠，别把默认项设成第二项）
         self.stackedWidget.addWidget(self.allTab)
-        self.pivot.addItem(
-            routeKey="byId",
-            text="按 ID 查询",
-            onClick=lambda: self.stackedWidget.setCurrentWidget(self.idTab),
-        )
+        self.stackedWidget.addWidget(self.idTab)
         self.pivot.addItem(
             routeKey="all",
             text="全部表情包",
             onClick=lambda: self.stackedWidget.setCurrentWidget(self.allTab),
+        )
+        self.pivot.addItem(
+            routeKey="byId",
+            text="按 ID 查询",
+            onClick=lambda: self.stackedWidget.setCurrentWidget(self.idTab),
         )
 
         layout = QVBoxLayout(self)
@@ -385,10 +442,17 @@ class EmojiPage(QWidget):
 
         layout.addWidget(self.stackedWidget, 1)
 
-        self.pivot.setCurrentItem("byId")
-        self.stackedWidget.setCurrentWidget(self.idTab)
+        self.pivot.setCurrentItem("all")
+        self.stackedWidget.setCurrentWidget(self.allTab)
 
-    # ---- 外部入口（主页「最近搜索」跳转带参） ----
+    # ---- 外部入口（主页「最近搜索」跳转带参 / MainWindow 预拉取） ----
+
+    def ensure_all_packages(self) -> None:
+        """静默预拉取全部表情包（Cookie 确认有效时由 `MainWindow` 调）。
+
+        不切页：用户留在主页，等他进本页时列表已经就绪。
+        """
+        self.allTab.ensure_loaded()
 
     def query_package_id(self, text: str) -> None:
         """切到「按 ID 查询」标签并立即查询该 ID。"""

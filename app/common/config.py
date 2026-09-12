@@ -73,6 +73,12 @@ class AppConfig(QConfig):
     account_name = ConfigItem("Account", "accountName", "")
     account_mid = ConfigItem("Account", "accountMid", 0)
     account_face = ConfigItem("Account", "accountFace", "")
+    # Cookie 有效性检测的结果：时间戳 + Cookie 指纹 + 结论（见 app/components/cookie_status.py）。
+    # 默认 0 / "" / "" 天然表示「从没验过」，所以**不需要动 CONFIG_SCHEMA / _migrate**
+    # —— 这三个键由 _ensure_persisted 自动补写进配置文件。
+    cookie_checked_at = ConfigItem("Account", "cookieCheckedAt", 0)
+    cookie_checked_hash = ConfigItem("Account", "cookieCheckedHash", "")
+    cookie_checked_state = ConfigItem("Account", "cookieCheckedState", "")
     download_dir = ConfigItem(
         "Download", "dir", str(Path.home() / "Downloads" / "biliemoji")
     )

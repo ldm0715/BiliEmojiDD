@@ -5,12 +5,16 @@
 应用启动落在**表情包页的「按 ID 查询」标签**：没有 ID 就没有任何内容，整页是空的。
 第一眼既不好看，也没有回答「这个应用能做什么、我该从哪一步开始」。
 
+> 后来表情包页的默认标签换成了有内容的「全部表情包」（见
+> [cookie_status.md](cookie_status.md) 第六节），但主页作为启动页的引导作用没变：
+> 侧栏第一项、状态概览、三步上手都还在。
+
 于是在侧栏最上方（表情包之上）新增 **主页**，作为启动默认页。四个设计决定：
 
 | 决定 | 选择 | 理由 |
 |---|---|---|
 | 版式 | 英雄卡 + 三张带图功能卡 + 快速上手 / 关于 | 信息密度与引导性最好 |
-| 展示图 | 一次性抓好裁好存进 `static/showcase/` 并入库 | **主页零网络请求**，离线可用、无 Cookie 依赖、断言脚本可直接跑 |
+| 展示图 | 一次性抓好裁好存进 `static/showcase/` 并入库 | 主页**不直接发请求**（唯一的联网动作是进页面时按信任期做的 Cookie 检测），离线可用、无 Cookie 依赖、断言脚本可直接跑 |
 | 组件 | 全部取自 qfluentwidgets | 主题切换自动跟随，不写自定义 QSS |
 | 导航 | 主页只发信号，`MainWindow` 负责 `switchTo` | 主页不反向引用主窗口 |
 
@@ -35,8 +39,8 @@
 主页                                     ← page_title + title_row（36px 页边距，与其余四页一致）
 ┌───────────────────────────────────────┐
 │ [logo] BiliEmojiDD  v0.1.0  [开始使用] │  _HeroCard
-│ 一句话简介          [打开下载文件夹]     │  · 主按钮随 Cookie 状态变文案与去向
-│ ● Cookie 已配置 · 队列 3 项            │  · 下载目录单独一行且 wordWrap
+│ 一句话简介          [打开下载文件夹]     │  · 主按钮只看 Cookie 有没有填
+│ ● Cookie 有效 · 队列 3 项              │  · 状态灯反映「能不能用」（见 cookie_status.md）
 └───────────────────────────────────────┘
 ┌─────────┐ ┌─────────┐ ┌─────────┐        _FeatureCard ×3，响应式 3 / 2 / 1 列
 │ 表情包   │ │ 收藏集   │ │ 下载     │
@@ -218,16 +222,22 @@ while self.stepsLeftQueue and self.stepsLeftQueue[0][1] == 0:    # 精确等于 
 
 ```bash
 QT_QPA_PLATFORM=offscreen PYTHONIOENCODING=utf-8 uv run python scripts/check_home_page.py
+QT_QPA_PLATFORM=offscreen PYTHONIOENCODING=utf-8 uv run python scripts/check_cookie_status.py  # 状态灯状态机
 QT_QPA_PLATFORM=offscreen uv run python scripts/bench_home_paint.py            # 单帧重绘基准
 QT_QPA_PLATFORM=offscreen uv run python scripts/bench_home_paint.py --legacy   # 改动前的画法，做 A/B
 QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py   # 生成 home_page_{light,dark}.png
 ```
 
 `check_home_page.py` 覆盖：版式与页边距、三张功能卡的点击路由、英雄卡随 Cookie/队列刷新、
-队列预览张数与 `+N`、展示图能读出来 + 素材缺失时的降级、响应式列数 3/2/1 与整页最小宽度、
-**滚轮能滚到底并停住**、目标页公开入口（用 monkeypatch 拦掉 `run_task`，脚本不联网）、
-**滚动性能前提**（图全走 `_FlatImageLabel`、预处理图恰好 `size*dpr`、圆角已进 alpha、
-一格滚轮 ≤12 帧且步数整除）、主题切换存活。
+**状态灯五态文案与配色**（含写入记录后真的变色）、队列预览张数与 `+N`、
+展示图能读出来 + 素材缺失时的降级、响应式列数 3/2/1 与整页最小宽度、
+**滚轮能滚到底并停住**、表情包页标签顺序与目标页公开入口（用 monkeypatch 拦掉
+`run_task`，脚本不联网）、**滚动性能前提**（图全走 `_FlatImageLabel`、预处理图恰好
+`size*dpr`、圆角已进 alpha、一格滚轮 ≤12 帧且步数整除）、主题切换存活。
+
+Cookie 状态本身（信任期、指纹作废、自动预拉取）不在这个脚本里，见
+`docs/cookie_status.md`。**本页的脚本要 `cookie_status.set_enabled(False)`** ——
+`showEvent` 会触发一次检测，不关掉就会真发一个请求。
 
 `bench_home_paint.py` 不是断言脚本、不进收尾批跑——它打印单帧重绘耗时，供改动前后对比。
 **不要用截图判断性能或观感**，离屏渲染出的图跟真机对不上。

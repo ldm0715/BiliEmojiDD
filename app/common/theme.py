@@ -15,6 +15,10 @@ from qfluentwidgets import ThemeColor, isDarkTheme, qconfig
 BODY_TEXT = ("#1f1f1f", "#f2f2f2")  # 主文字：浅色深字 / 深色浅字
 SECONDARY_TEXT = ("#6f6f6f", "#9aa0a6")  # 次要/提示文字
 ORANGE_TEXT = ("#f69730", "#f69730")  # 收藏集徽标 / 已下载状态，两主题一致
+# 状态灯的两档。**不是**照抄 mirror_card 的胶囊底色（那是给白字压的深底），
+# 文字色在暗色主题下要提亮才不会糊在 #202020 上。
+SUCCESS_TEXT = ("#0f7b0f", "#4cc24c")  # Cookie 有效
+DANGER_TEXT = ("#c42b1c", "#ff6b5e")  # Cookie 已失效
 
 
 def is_dark() -> bool:

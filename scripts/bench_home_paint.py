@@ -28,11 +28,13 @@ from PySide6.QtWidgets import QApplication
 
 app = QApplication(sys.argv)
 
+from app.components import cookie_status
 from app.components.content_meta import content_meta
 from app.view import home_page as hp
 from app.view.home_page import HomePage
 
 content_meta.set_enabled(False)  # 队列卡片会为可见项懒加载内容数量
+cookie_status.set_enabled(False)  # 主页 showEvent 会触发一次 Cookie 检测
 
 LEGACY = "--legacy" in sys.argv
 if LEGACY:
@@ -109,7 +111,6 @@ bench("功能卡 下载", page.downloadCard)
 bench("展示图带 _ShowcaseStrip", page.emojiStrip)
 bench("快速上手卡", page.quickStartCard)
 bench("关于卡", page.aboutCard)
-bench("最近搜索卡", page.recentCard)
 if page.emojiStrip.count():
     bench("单个 ImageLabel", page.emojiStrip._labels[0])
 

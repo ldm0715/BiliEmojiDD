@@ -132,9 +132,10 @@ check(
     "on_progress 可省略（屏幕外脚本 / 测试照旧无参构造）",
 )
 
-from app.components import updater
+from app.components import cookie_status, updater
 
 updater.set_enabled(False)  # 启动 3 秒后的自动检查会真发网络请求
+cookie_status.set_enabled(False)  # 主页 showEvent 会触发一次 Cookie 检测
 
 messages: list[str] = []
 window = MainWindow(on_progress=messages.append)

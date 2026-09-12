@@ -47,7 +47,7 @@
 不会像以前那样静默变成直连。`thumb` / `video_cache` 这类 worker 仍在主线程读好
 `current_proxies()` 再显式传进去（worker 不碰 `cfg`）。
 
-联网入口一共七处，全部改走工厂：
+联网入口一共九处，全部改走工厂：
 
 | 入口 | 位置 |
 |---|---|
@@ -56,7 +56,9 @@
 | 缩略图 | `app/components/thumb.py` |
 | 收藏集视频缓存 | `app/components/video_cache.py` |
 | 代理连通性自检 | `app/components/proxy_probe.py` |
-| Cookie 验证 / 全部表情包 | `app/view/setting_page.py`、`app/view/emoji_page.py` |
+| Cookie 验证 / 账号信息 / 全部表情包 | `app/view/setting_page.py`、`app/view/emoji_page.py` |
+| 扫码登录（二维码申请 / 轮询 / `nav`） | `app/components/bili_login.py` |
+| Cookie 有效性检测（进主页按信任期探一次） | `app/components/cookie_status.py` |
 
 **新增联网代码一律走这些工厂**，别再直接 new 上游对象——`scripts/check_proxy_hint.py`
 第 3 节会检查每个工厂产出的 session `trust_env is False`。

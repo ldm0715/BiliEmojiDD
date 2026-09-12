@@ -23,6 +23,7 @@ apply_app_font(app)
 
 from qfluentwidgets import Theme, setTheme
 
+from app.components import cookie_status
 from app.components.content_meta import content_meta
 from app.components.download_queue import download_queue
 from app.components.video_cache import video_cache
@@ -32,6 +33,7 @@ from app.components.widgets import DressCard, PackageCard, QueueCard
 content_meta.set_enabled(False)
 # 视频页同理：假 URL 会排一堆超时下载任务
 video_cache.set_enabled(False)
+cookie_status.set_enabled(False)  # 不要为截图真发一次 Cookie 检测请求
 
 OUT = Path(__file__).resolve().parent.parent / "screenshots"
 OUT.mkdir(exist_ok=True)

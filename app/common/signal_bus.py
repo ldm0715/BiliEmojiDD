@@ -14,6 +14,8 @@ class SignalBus(QObject):
       worker 发原始信号、主线程写完缓存再广播；载荷 None 表示「取不到」。
     - videoRawReady / videoReady：收藏集视频下载到本地临时目录，结构同上，
       载荷为本地文件路径字符串，None 表示「取不到」。
+    - cookieStateChanged：Cookie 有效性状态变了（cookie_status 的五态之一），
+      主页据此刷状态灯、MainWindow 据此决定要不要预拉取全部表情包。
     """
 
     thumbRawLoaded = Signal(str, object)  # url, QImage（worker 线程）
@@ -24,6 +26,7 @@ class SignalBus(QObject):
     videoRawReady = Signal(str, object)  # url, 本地路径 str|None（worker 线程）
     videoReady = Signal(str, object)  # url, 本地路径 str|None（主线程）
     configChanged = Signal()
+    cookieStateChanged = Signal(str)  # cookie_status 的五态之一（主线程）
 
 
 signal_bus = SignalBus()

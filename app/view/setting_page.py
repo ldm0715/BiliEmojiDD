@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from biliemoji import AuthRequired
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -63,7 +64,9 @@ from app.common.resource import app_icon
 from app.common.signal_bus import signal_bus
 from app.common.theme import bind_theme
 from app.common.version import is_newer
+from app.components import cookie_status
 from app.components.bili_login import fetch_account
+from app.components.cache import save_all_packages_cache
 from app.components.disk_cache import MB, clear_all, total_size
 from app.components.download_runner import open_in_explorer
 from app.components.login_dialog import (
@@ -458,8 +461,13 @@ class SettingPage(QWidget):
 
         **换了值就先清掉上一个账号的昵称头像**：新的 nav 请求回来之前若继续显示
         旧昵称，用户会以为登的还是那个号。
+
+        **Cookie 有效性记录一律作废**（不看值有没有变）：用户重新填一遍就是
+        「我要重新验证」的意思，不能因为指纹恰好没变就把上一盏红灯继续摆下去。
+        紧接着的 `_refresh_account` 会用一次 nav 重新给出结论。
         """
         changed = cookie != cfg.cookie.value
+        cookie_status.invalidate()
         qconfig.set(cfg.cookie, cookie)
         if changed:
             qconfig.set(cfg.account_name, "")
@@ -470,7 +478,11 @@ class SettingPage(QWidget):
         self._refresh_account(cookie)
 
     def _refresh_account(self, cookie: str = "") -> None:
-        """查一次「当前登的是谁」并记下来。拿不到就静默——不拿它当错误报。"""
+        """查一次「当前登的是谁」并记下来。拿不到就静默——不拿它当错误报。
+
+        这一次 `nav` 同时是 Cookie 有效性的权威判据：结果并进 `cookie_status`
+        的同一份记录，主页的状态灯因此不必再多打一次请求。
+        """
         cookie = (cookie or cfg.cookie.value).strip()
         if not cookie:
             return
@@ -478,11 +490,16 @@ class SettingPage(QWidget):
         proxies = current_proxies()
         run_task(
             lambda: fetch_account(cookie, proxies=proxies),
-            on_success=self._on_account,
-            on_error=lambda _e: None,
+            on_success=lambda account: self._on_account(account, cookie),
+            on_error=lambda _e: None,  # 网络失败不改状态（网络不通不算 Cookie 失效）
         )
 
-    def _on_account(self, account) -> None:
+    def _on_account(self, account, cookie: str = "") -> None:
+        # 「B 站明确说没登录」= 失效；网络异常走不到这里。Cookie 用发起时的快照，
+        # 免得中途登出 / 换号把结论写到别人头上
+        cookie_status.note(
+            cookie_status.VALID if account else cookie_status.INVALID, cookie
+        )
         if account is None:
             return
         qconfig.set(cfg.account_name, account.name)
@@ -510,9 +527,19 @@ class SettingPage(QWidget):
         run_task(
             task,
             on_success=self._on_verify_ok,
-            on_error=lambda e: show_bili_error(e, self),
+            on_error=self._on_verify_failed,
             on_finished=lambda ok: self.verifyBtn.setEnabled(True),
         )
+
+    def _on_verify_failed(self, exc) -> None:
+        """验证失败：只有明确的鉴权失败才动状态。
+
+        其它失败（网络 / 风控 / 超时）保持原状——错误提示已经由 `show_bili_error`
+        给出，不该顺手把状态灯判红。
+        """
+        if isinstance(exc, AuthRequired):
+            cookie_status.invalidate()
+        show_bili_error(exc, self)
 
     def _on_verify_ok(self, packages) -> None:
         notify_success(
@@ -522,6 +549,11 @@ class SettingPage(QWidget):
             position=InfoBarPosition.TOP_RIGHT,
             duration=5000,
         )
+        # 并进同一份 Cookie 状态（主页的灯读它），顺带把这批全量写进缓存——
+        # 主页那次静默预拉取随后命中缓存、零请求
+        cookie = cfg.cookie.value
+        cookie_status.note(cookie_status.VALID, cookie)
+        save_all_packages_cache(cookie, packages)
         # 顺手把昵称头像补上：验证过了说明 Cookie 可用，账号信息也该拿得到
         self._refresh_account()
 

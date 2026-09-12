@@ -3,10 +3,12 @@
 1. 版式：大标题「主页」与 36px 页边距对齐；滚动区显式透明；
 2. 功能卡：三张卡标题正确，点击各自发出正确的 navigateRequested；
 3. 英雄卡：主按钮随 Cookie 状态换文案与去向，状态行随队列/配置刷新；
+   状态灯五态文案与配色（纯映射 + 写入记录后真的跟着变）；
 4. 展示图：static/showcase 的图能读出来；素材缺失时整条缩略图带降级隐藏；
 5. 响应式：宽/中/窄三档下功能卡列数为 3/2/1，且整页最小宽度不顶破最小窗口；
 6. 滚轮能滚到底并停住；
-7. 目标页公开入口：EmojiPage.query_package_id / filter_packages、DressPage.search_keyword；
+7. 表情包页标签顺序（全部表情包在前且默认）与目标页公开入口
+   EmojiPage.query_package_id / filter_packages、DressPage.search_keyword；
 8. 滚动性能前提：图全走扁平化 ImageLabel（预缩放 + 预圆角 = 纯 blit）、
    一格滚轮的帧数被压到 12 且步数整除（见 page_scaffold.tune_scroll）；
 9. 主题切换不崩。
@@ -38,6 +40,13 @@ from qfluentwidgets import ImageLabel, Theme, qconfig, setTheme
 
 from app.common.config import cfg
 from app.common.signal_bus import signal_bus
+from app.common.theme import (
+    DANGER_TEXT,
+    ORANGE_TEXT,
+    SECONDARY_TEXT,
+    SUCCESS_TEXT,
+)
+from app.components import cookie_status
 from app.components.content_meta import content_meta
 from app.components.download_queue import download_queue
 from app.components.page_scaffold import PAGE_MARGIN, SCROLL_DURATION, tune_scroll
@@ -58,6 +67,9 @@ from app.view.home_page import (
 setTheme(Theme.LIGHT)
 content_meta.set_enabled(False)  # 假数据会排一堆 15s 超时请求把脚本挂住
 video_cache.set_enabled(False)
+# 主页 showEvent 会触发一次 Cookie 检测：不关掉就会真发一个 nav 请求，
+# 假 SESSDATA 只会排一个 10s 超时，把脚本挂在这里
+cookie_status.set_enabled(False)
 
 FAILS: list[str] = []
 
@@ -150,6 +162,54 @@ page.heroCard.primaryBtn.click()
 settle()
 check(routes == [NAV_EMOJI], f"有 Cookie 时主按钮跳表情包页（得到 {routes}）")
 check("已配置" in page.heroCard.cookieLabel.text(), "状态行提示已配置 Cookie")
+
+# ---- 状态灯：五态文案与配色（映射是纯函数，直接断言它，不从 QLabel 回读像素） ----
+print("\n[Cookie 状态灯]")
+_LIGHT_TEXT = {
+    cookie_status.NO_COOKIE: ("● 未配置 Cookie", ORANGE_TEXT),
+    cookie_status.CHECKING: ("● 正在检测 Cookie…", SECONDARY_TEXT),
+    cookie_status.VALID: ("● Cookie 有效", SUCCESS_TEXT),
+    cookie_status.INVALID: ("● Cookie 已失效", DANGER_TEXT),
+    cookie_status.UNKNOWN: ("● Cookie 已配置（未验证）", SECONDARY_TEXT),
+}
+for state, (text, color) in _LIGHT_TEXT.items():
+    got_text, got_color = home_mod.cookie_light(state)
+    check(got_text == text, f"{state} 文案为「{text}」（得到「{got_text}」）")
+    check(got_color == color, f"{state} 配色与该主题色对一致（{got_color}）")
+check(
+    home_mod.cookie_light("不认识的态") == home_mod.cookie_light(cookie_status.UNKNOWN),
+    "认不出的状态退回「未验证」，不留空灯",
+)
+
+# 记录写下之后灯要跟着变（有 Cookie + 记录匹配指纹 → 有效/失效）
+_ck = cfg.cookie.value
+cookie_status.note(cookie_status.VALID, _ck)
+settle()
+check(
+    page.heroCard.cookieLabel.text() == "● Cookie 有效",
+    f"写入「有效」记录后灯变绿（得到「{page.heroCard.cookieLabel.text()}」）",
+)
+check(
+    page.heroCard.cookieLabel.lightColor.name() == SUCCESS_TEXT[0],
+    f"亮色档用的是 SUCCESS_TEXT（{page.heroCard.cookieLabel.lightColor.name()}）",
+)
+cookie_status.note(cookie_status.INVALID, _ck)
+settle()
+check(
+    page.heroCard.cookieLabel.text() == "● Cookie 已失效",
+    f"写入「失效」记录后灯变红（得到「{page.heroCard.cookieLabel.text()}」）",
+)
+check(
+    page.heroCard.cookieLabel.lightColor.name() == DANGER_TEXT[0],
+    f"亮色档用的是 DANGER_TEXT（{page.heroCard.cookieLabel.lightColor.name()}）",
+)
+check(page.heroCard.primaryBtn.text() == "开始使用", "失效时主按钮仍是「开始使用」（不改成去修复）")
+routes.clear()
+page.heroCard.primaryBtn.click()
+settle()
+check(routes == [NAV_EMOJI], f"失效时主按钮仍跳表情包页（得到 {routes}）")
+cookie_status.invalidate()
+settle()
 
 download_queue.add(_Pkg(1))
 settle()
@@ -265,6 +325,22 @@ dress_mod.run_task = lambda *a, **kw: tasks.append("dress")
 
 emoji = EmojiPage()
 emoji.resize(900, 700)
+check(
+    list(emoji.pivot.items) == ["all", "byId"],
+    f"标签顺序为「全部表情包 → 按 ID 查询」（得到 {list(emoji.pivot.items)}）",
+)
+check(
+    emoji.stackedWidget.indexOf(emoji.allTab) == 0,
+    f"栈里 allTab 在第 0 位（得到 {emoji.stackedWidget.indexOf(emoji.allTab)}）",
+)
+check(
+    emoji.stackedWidget.currentWidget() is emoji.allTab,
+    "默认停在「全部表情包」（不再是一进去就空白的按 ID 查询）",
+)
+check(
+    emoji.pivot.currentItem() is emoji.pivot.widget("all"),
+    "Pivot 指示条同步落在「全部表情包」上",
+)
 emoji.filter_packages("热词")
 settle()
 check(emoji.stackedWidget.currentWidget() is emoji.allTab, "filter_packages 切到全部表情包页")

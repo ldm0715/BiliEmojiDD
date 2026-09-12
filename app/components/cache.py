@@ -17,7 +17,12 @@ _ALL_PACKAGES_FILE = APP_CONFIG_DIR / "all_packages.json"
 _CACHE_TTL_SECONDS = 24 * 3600  # 24 小时
 
 
-def _cookie_hash(cookie: str) -> str:
+def cookie_fingerprint(cookie: str) -> str:
+    """Cookie 的短指纹（sha1 前 12 位）。
+
+    用来判断「这份记录/缓存还是不是同一个账号的」——缓存与 Cookie 有效性记录
+    （`cookie_status`）共用同一个口径，改动这里等于两处一起改。
+    """
     return hashlib.sha1((cookie or "").encode("utf-8")).hexdigest()[:12]
 
 
@@ -27,7 +32,7 @@ def load_all_packages_cache(cookie: str) -> tuple[EmotePackage, ...] | None:
         return None
     try:
         data = json.loads(_ALL_PACKAGES_FILE.read_text(encoding="utf-8"))
-        if data.get("cookie_hash") != _cookie_hash(cookie):
+        if data.get("cookie_hash") != cookie_fingerprint(cookie):
             return None
         saved_at = float(data.get("saved_at", 0))
         if time.time() - saved_at > _CACHE_TTL_SECONDS:
@@ -45,7 +50,7 @@ def save_all_packages_cache(cookie: str, packages) -> None:
     try:
         _ALL_PACKAGES_FILE.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "cookie_hash": _cookie_hash(cookie),
+            "cookie_hash": cookie_fingerprint(cookie),
             "saved_at": time.time(),
             "packages": [p.raw for p in packages],
         }

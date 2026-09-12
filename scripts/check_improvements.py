@@ -286,9 +286,10 @@ check(
     hasattr(sp, "openDirBtn") and sp.openDirBtn.text() == "打开下载文件夹",
     "设置页存在「打开下载文件夹」按钮",
 )
-from app.components import updater
+from app.components import cookie_status, updater
 
 updater.set_enabled(False)  # MainWindow 启动后会静默查一次新版本
+cookie_status.set_enabled(False)  # 主页 showEvent 会触发一次 Cookie 检测
 
 from app.MainWindow import MainWindow
 

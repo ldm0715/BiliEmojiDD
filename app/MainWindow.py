@@ -24,6 +24,7 @@ from app.common.resource import app_icon
 from app.common.signal_bus import signal_bus
 from app.common.theme import is_dark
 from app.common.version import is_newer
+from app.components import cookie_status
 from app.components.task import run_task, task_manager
 from app.components.update_dialog import show_update_dialog
 from app.components.updater import fetch_latest_release
@@ -69,6 +70,10 @@ class MainWindow(FluentWindow):
         self.settingPage = SettingPage(self)
 
         report("正在装配窗口…")
+        # 主页在 showEvent 里触发 Cookie 检测，结论经这个信号回来 → 静默预拉取
+        # 全部表情包。连接放在「页面都构造好、initNavigation 之前」：主页是被
+        # addSubInterface 显示出来的，那一刻信号必须已经有人接。
+        signal_bus.cookieStateChanged.connect(self._on_cookie_state)
         self.initNavigation()
         self.initWindow()
         if cfg.auto_check_update.value:
@@ -151,6 +156,22 @@ class MainWindow(FluentWindow):
         }.get(key)
         if page is not None:
             self.switchTo(page)
+
+    # ---- Cookie 状态 ----
+
+    def _on_cookie_state(self, state: str) -> None:
+        """Cookie 确认有效 → 后台静默预拉取全部表情包（**不切页**）。
+
+        用户留在主页，等他进表情包页时列表已经就绪（命中 24 小时缓存时零请求）。
+        再核对一次 `known_state()` 是防迟到回调：探针在飞的时候用户可能已经登出，
+        那时记录已被 `_apply_cookie` 作废，不该再拿旧结论去发请求。
+        """
+        if state != cookie_status.VALID:
+            return
+        if cookie_status.known_state() != cookie_status.VALID:
+            return
+        # 延到事件循环第一拍：别把「读缓存 + 建 20 张卡片」的开销塞进窗口构造
+        QTimer.singleShot(0, self.emojiPage.ensure_all_packages)
 
     # ---- 检查更新 ----
 

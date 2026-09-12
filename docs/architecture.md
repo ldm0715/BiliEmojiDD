@@ -44,6 +44,7 @@ app/
 │   ├── download_runner.py 统一下载流程 + 表情包/收藏集/混合批量下载
 │   ├── download_queue.py  会话级下载队列（混合表情包 + 收藏集）
 │   ├── dress_helpers.py   收藏集类别判别 + dlc id 读取（绕开 biliemoji typed 字段 bug）
+│   ├── cookie_status.py   Cookie 有效性状态灯（五态 + 信任期 + nav 探针）
 │   └── cache.py        全部表情包本地缓存
 └── view/
     ├── home_page.py    主页（启动默认页）
@@ -94,7 +95,9 @@ UI 线程（主线程）              后台线程（QThreadPool / Python 线程
 
 **按 ID 查询表情包**：`_IdQueryTab` → `run_task(Emoji.certain_emoji_typed(ids))` → `Task` 后台请求 → `result` 信号 → `PackageDetailView.set_package(pkg)` → `EmojiGrid.set_emotes` → 逐卡 `thumb_manager.request(url)` → 缩略图 worker 下载解码 → `thumbLoaded` → 卡片图标。
 
-**全部表情包**：`_AllPackagesTab._on_fetch` → 优先读本地缓存 → 未命中则 `run_task(Emoji.all_packages())` → 成功后 `cache.save_all_packages_cache` 落盘 → `_repopulate` 本地关键词过滤 + `PageBar` 分页（每页 20）→ 点击卡片 → `run_task(Emoji.certain_emoji_typed(id))` 拉完整详情（all_packages 只含元信息）。
+**全部表情包**：`_AllPackagesTab._load`（两条入口：按钮 `_on_fetch` 会提示、`ensure_loaded` 静默）→ 优先读本地缓存 → 未命中则 `run_task(Emoji.all_packages())` → 成功后 `cache.save_all_packages_cache` 落盘 → `_repopulate` 本地关键词过滤 + `PageBar` 分页（每页 20）→ 点击卡片 → `run_task(Emoji.certain_emoji_typed(id))` 拉完整详情（all_packages 只含元信息）。
+
+**Cookie 有效性检测 → 静默预拉取**：`HomePage.showEvent` → `cookie_status.ensure_checked()` → 记录新鲜就直接广播结论（零请求），否则 `run_task(fetch_account)` 打 `nav` → 结论（时间戳 + Cookie 指纹 + 有效/失效）落盘 → `signal_bus.cookieStateChanged`。两处消费者：主页英雄卡刷状态灯；`MainWindow._on_cookie_state` 复核后 `QTimer.singleShot(0, emojiPage.ensure_all_packages)` → 上一条那个静默入口（**不切页**）。详见 `docs/cookie_status.md`。
 
 **收藏集搜索与详情**：`DressPage` → `run_task(search_dress_typed)` → `DressGrid` 四列卡片（类别徽标读 `dress_helpers`，绕开 biliemoji `is_collection` bug）→ 点击 → `dlc_ids(summary)` 取字符串 id → `run_task(certain_lottery_typed)` → 内容预览卡按 `Pivot` 分两页：`DressDetailGrid`（卡片尺寸按视口/数量动态计算）与「动态视频」（`CollectionVideoPlayer` 内嵌播放器 + `VideoStrip` 缩略图选择条）。
 
@@ -105,5 +108,6 @@ UI 线程（主线程）              后台线程（QThreadPool / Python 线程
 ## 配置与缓存
 
 - 配置：`AppConfig(QConfig)`，`qconfig.load` 持久化到 `%APPDATA%/biliEmojiDD/config.json`。`theme` 项带 `EnumSerializer(Theme)`（否则 `json.dump` 崩）。Cookie / 目录变更即时生效（每次操作现读 `cfg`）。
-- 缓存：`all_packages` 结果按 cookie 指纹 + 24h TTL 存 `%APPDATA%/biliEmojiDD/all_packages.json`；用 `EmotePackage.raw`（完整原始 dict）持久化、`from_dict` 无损重建。
+  - **新增字段不需要写迁移**：`_ensure_persisted()` 启动时比一次「文件原文 vs 内存快照」，缺键就补写；默认值本身要能表达「没有」（如 `cookieCheckedAt=0` / `cookieCheckedHash=""`）。要改老数据才动 `CONFIG_SCHEMA`（+1）与 `_migrate`，且**迁移判据不能是「文件里有没有这个键」**——`qconfig.set` 值没变时不落盘，靠键存在熄火会永久武装。
+- 缓存：`all_packages` 结果按 cookie 指纹（`cache.cookie_fingerprint`）+ 24h TTL 存 `%APPDATA%/biliEmojiDD/all_packages.json`；用 `EmotePackage.raw`（完整原始 dict）持久化、`from_dict` 无损重建。Cookie 有效性记录（`cookieChecked*` 三项）也在配置里，用同一个指纹口径、**另有自己的信任期**（有效 7 天 / 失效 30 分钟）。
 - 版本号：**唯一来源是 `pyproject.toml` 的 `[project] version`**，`app/common/version.py::project_version()` 用 `tomllib` 在运行时读（`[tool.uv] package=false` 拿不到 `importlib.metadata`）。编译后该文件随 exe 一起分发。读不到时返回 `"unknown"`——一个解析不出来的值，使检查更新安静地不提示而不是误报有新版。

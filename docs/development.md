@@ -24,6 +24,8 @@ uv run ruff check .              # 代码检查
    - worker 线程（QRunnable / biliemoji 内部线程池）禁止直接改控件；只 emit 主线程构造的信号对象。
    - `QPixmap` 只能在主线程创建/使用；worker 只产 `QImage` 或字节。
    - `Task` / 缩略图任务务必 `autoDelete(False)` 并由 Manager 持有引用，否则队列信号可能丢失。
+   - **带载荷的信号不能直接接无参槽**：`signal_bus.cookieStateChanged` 载着一个 `str`，`connect(self.refresh)` 会 `TypeError`，得包一层转发的槽（或 lambda）。
+   - **清「正在飞」标志必须挂 `on_finished`**：成功与两条异常路都会走它，只挂 `on_success` 会让失败一次之后永远不再重试（探针、预拉取都踩过）。屏幕外脚本里的 `run_task` 桩同理，**必须回调 `on_finished`**。
 2. **测试脚本陷阱**
    - 验证后台任务信号时，不要写「短暂 `processEvents()` 后结束脚本」的测试——脚本退出早于 worker 会看到 `Internal C++ object ... already deleted` 假象（真实 app 里 `app.exec()` 常驻无此问题）。应轮询等待任务完成再退出。
 3. **布局**
@@ -36,6 +38,8 @@ uv run ruff check .              # 代码检查
 5. **配置**
    - 配置存 `%APPDATA%/biliEmojiDD/config.json`，不写项目目录（打包后不可写）。
    - 新增枚举类配置项必须配 `EnumSerializer`，否则 `qconfig.save()` 的 `json.dump` 抛 `TypeError`。
+   - **新增普通字段不用写迁移**：新键由 `config.py::_ensure_persisted()` 启动时自动补写，默认值本身要能表达「没有」（如 `cookieCheckedAt=0` / `cookieCheckedHash=""`）。只有需要**根据老数据推断新值**时才动 `CONFIG_SCHEMA`（+1）和 `_migrate`，而且迁移的熄火标记必须是那个显式版本号——**不能靠「文件里有没有这个键」**：`qconfig.set` 在值没变时根本不落盘（上游 `config.py:299`），靠这个判据会永久武装、把用户明确改过的设置反复翻回去。踩坑全过程见 [proxy_diagnostics.md](proxy_diagnostics.md)。
+   - `qconfig.set(item, value)` 才落盘；直接写 `cfg.item.value = v` 只改内存（迁移里的临时改动就靠这个，落盘统一交 `_ensure_persisted`）。
 6. **biliemoji**
    - 模型类从 `biliemoji.models` 导入（`EmotePackage` 等顶层不导出）。
    - `all_packages()` 返回的包**不含完整 emote**（只含元信息），进详情必须另调 `certain_emoji_typed(id)`。
@@ -80,4 +84,18 @@ uv run ruff check .              # 代码检查
 1. `uv run ruff check .`
 2. `uv run python -c "import biliemoji, qfluentwidgets, PySide6"`
 3. `uv run python main.py` 启动确认不崩溃；
-4. 依赖真实 B 站网络 + 用户 Cookie 的流程（拉取、下载、收藏集搜索）需人工验证。
+4. 跑一遍屏幕外断言脚本（改动涉及的至少各跑一次，收尾跑全量）：
+
+   ```bash
+   QT_QPA_PLATFORM=offscreen PYTHONIOENCODING=utf-8 uv run python scripts/check_xxx.py
+   # 全量批跑（Windows 终端默认 GBK，中文断言文案要 PYTHONIOENCODING=utf-8）
+   for s in scripts/check_*.py; do printf "%-40s" "$s"; \
+     QT_QPA_PLATFORM=offscreen PYTHONIOENCODING=utf-8 uv run python "$s" >/tmp/o.txt 2>&1; tail -1 /tmp/o.txt; done
+   ```
+
+   **要写配置 / 缓存 / 历史的脚本必须先隔离 `APPDATA`**，**会联网的脚本必须关掉对应开关**
+   （`content_meta` / `video_cache` / `updater` / `bili_login` / `cookie_status` 的 `set_enabled(False)`）——
+   `check_shell.py` 开头那段是现成范本。
+5. 依赖真实 B 站网络 + 用户 Cookie 的流程（拉取、下载、收藏集搜索、Cookie 失效）需人工验证。
+6. **AI 不要自己截图判断 UI 或性能**：`scripts/screenshot_pages.py` 的产物是给人工比对的，
+   离屏渲染跟真机对不上。量不出来的就如实说「这条需要人工看」。

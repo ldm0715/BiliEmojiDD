@@ -10,8 +10,9 @@
 3. `_QuickStartCard` —— 三步上手，每步一个跳转按钮
 4. `_AboutCard`  —— 版本 / SDK / 链接 / 配置目录 / 免责声明
 
-**本页零网络请求**：展示图来自 `static/showcase/`（由 `scripts/fetch_showcase.py` 一次性
-抓好入库），状态数据全是本地配置与内存队列。
+**本页不直接发请求**：展示图来自 `static/showcase/`（由 `scripts/fetch_showcase.py` 一次性
+抓好入库），状态数据是本地配置 + 内存队列 + Cookie 有效性记录。唯一的联网动作是
+`cookie_status.ensure_checked()`（进页面时调一次，受信任期约束，最多 7 天一个 `nav` 请求）。
 
 导航一律走信号（`navigateRequested`）交给 `MainWindow` 处理，本页不反向引用主窗口。
 """
@@ -55,7 +56,8 @@ from app.common.resource import (
     showcase_names,
 )
 from app.common.signal_bus import signal_bus
-from app.common.theme import ORANGE_TEXT, SECONDARY_TEXT
+from app.common.theme import DANGER_TEXT, ORANGE_TEXT, SECONDARY_TEXT, SUCCESS_TEXT
+from app.components import cookie_status
 from app.components.download_queue import download_queue, item_cover_url
 from app.components.download_runner import open_in_explorer
 from app.components.page_scaffold import (
@@ -321,6 +323,24 @@ class _FeatureCard(CardWidget):
         self.vBoxLayout.insertWidget(2, widget)
 
 
+# 状态灯：状态 → (文案, (亮色, 暗色))。做成模块级纯映射，断言脚本直接读它即可，
+# 不必从 QLabel 里回读像素。五态的定义见 app/components/cookie_status.py。
+_COOKIE_LIGHT = {
+    cookie_status.NO_COOKIE: ("● 未配置 Cookie", ORANGE_TEXT),
+    cookie_status.CHECKING: ("● 正在检测 Cookie…", SECONDARY_TEXT),
+    cookie_status.VALID: ("● Cookie 有效", SUCCESS_TEXT),
+    cookie_status.INVALID: ("● Cookie 已失效", DANGER_TEXT),
+    # 「填了但还没有结论」（离线 / 刚换号 / 记录过期）：文案里保留「已配置」，
+    # 不能比改动前（那时只要填过就显示已配置）更差
+    cookie_status.UNKNOWN: ("● Cookie 已配置（未验证）", SECONDARY_TEXT),
+}
+
+
+def cookie_light(state: str) -> tuple[str, tuple[str, str]]:
+    """状态灯该显示的文字与颜色对（纯函数，界面与断言共用）。"""
+    return _COOKIE_LIGHT.get(state, _COOKIE_LIGHT[cookie_status.UNKNOWN])
+
+
 class _HeroCard(SimpleCardWidget):
     """顶部欢迎卡：品牌 + 简介 + 状态概览 + 主按钮。"""
 
@@ -385,18 +405,23 @@ class _HeroCard(SimpleCardWidget):
         self.primaryBtn.clicked.connect(self._on_primary)
         self.openDirBtn.clicked.connect(self._on_open_dir)
         signal_bus.configChanged.connect(self.refresh)
+        # cookieStateChanged 带一个 str 载荷，不能直接接无参的 refresh()（TypeError）
+        signal_bus.cookieStateChanged.connect(self._on_cookie_state)
         download_queue.changed.connect(self.refresh)
+        self.refresh()
+
+    def _on_cookie_state(self, _state: str) -> None:
         self.refresh()
 
     def refresh(self) -> None:
         has_cookie = bool(cfg.cookie.value.strip())
-        self.cookieLabel.setText(
-            "● Cookie 已配置" if has_cookie else "● 未配置 Cookie"
-        )
-        # 未配置是需要注意的状态，用品牌橙（两个主题下都可读）
-        self.cookieLabel.setTextColor(*(SECONDARY_TEXT if has_cookie else ORANGE_TEXT))
+        text, color = cookie_light(cookie_status.current_state())
+        self.cookieLabel.setText(text)
+        self.cookieLabel.setTextColor(*color)
         self.queueLabel.setText(f"队列 {len(download_queue)} 项")
         self.dirLabel.setText(f"下载目录: {cfg.download_dir.value}")
+        # 按钮只看「填没填」——状态灯才反映「有没有用」（失效时仍给「开始使用」，
+        # 让用户自己去表情包页撞见报错，而不是被挡在主页）
         self.primaryBtn.setText("开始使用" if has_cookie else "填写 Cookie")
 
     def _on_primary(self) -> None:
@@ -795,3 +820,6 @@ class HomePage(QWidget):
         super().showEvent(event)
         self.heroCard.refresh()
         self._refresh_queue()
+        # 「每次进主页跑一次检测逻辑」：逻辑每次都跑，网络探测受信任期约束
+        # （见 app/components/cookie_status.py）——别把这里的早退当 bug
+        cookie_status.ensure_checked()
