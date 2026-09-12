@@ -16,6 +16,9 @@ dependencies = [
     # requests 的 socks 支持（requests[socks]）：代理地址写 socks5:// 时要靠它，
     # 没它直接抛 InvalidSchema
     "PySocks>=1.7.1",
+    # 扫码登录的二维码编码（app/components/login_dialog.py）。纯 Python、零传递依赖，
+    # 只用来算编码矩阵，绘制交给 QPainter——所以不需要 Pillow，也不做 PNG 解码。
+    "segno>=1.6",
 ]
 
 [dependency-groups]

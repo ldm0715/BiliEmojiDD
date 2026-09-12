@@ -36,6 +36,16 @@ ProxiesArg = Mapping[str, str] | None
 # 非 B 站请求（检查更新）用的 UA：GitHub API 不带 UA 直接 403
 USER_AGENT = f"{APP_NAME}/{APP_VERSION}"
 
+# B 站 web 端接口（biliemoji 那四个之外的）用的浏览器 UA。
+# **不能拿 USER_AGENT 顶**：passport 这类接口会按 UA 判客户端，"BiliEmojiDD/0.1.2"
+# 大概率被风控挡掉。版本档位与 biliemoji 内部的 UA 池保持一致，免得同一账号
+# 在服务端看来是两套客户端。
+BILI_WEB_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.6778.108 Safari/537.36"
+)
+BILI_REFERER = "https://www.bilibili.com/"
+
 
 def current_proxies() -> dict[str, str] | None:
     """当前该用的代理；开关关闭或地址为空时返回 None（直连）。"""
@@ -82,6 +92,28 @@ def make_session(
     resolved = _resolve(proxies)
     if resolved:
         session.proxies.update(resolved)
+    return session
+
+
+def make_bili_session(
+    cookie: str = "",
+    proxies: ProxiesArg | Any = _FROM_CFG,
+) -> requests.Session:
+    """B 站通用接口的会话（biliemoji 那四个接口之外的那些）。
+
+    存在的理由：扫码登录要读 **`Set-Cookie` 响应头**，而 `BiliClient.get_json()`
+    只返回 `resp.json()`，够不着响应头。本模块的两条硬规矩照守：代理只来自设置页、
+    `trust_env = False`。
+
+    cookie 挂在 session 默认头上（不是每次请求传）：`nav` 这类接口靠它认账号。
+    只在 worker 线程使用。
+    """
+    session = make_session(
+        proxies,
+        headers={"User-Agent": BILI_WEB_UA, "Referer": BILI_REFERER},
+    )
+    if cookie:
+        session.headers["Cookie"] = cookie
     return session
 
 

@@ -4,22 +4,31 @@
 另一半查新版式的几何与主题表现：
 
 1. 功能控件属性名 / 类型 / 取值全部保留（槽函数逐字未改，靠它们工作）；
-2. 三个分组 + 每组卡片数；
+2. 五个分组 + 每组卡片数；
 3. 下载目录副标题跟随 `dirEdit`（纯展示同步）；
 4. 可展开卡片展开后变高；
 5. 窄窗口下右侧控件不被裁（代理行最挤）；
 6. 卡片随主题重刷 QSS + 主题下拉闭合态图标随主题重新取色；
 7. 滚动区显式透明（FluentWindow 里不透明会在暗色下露 palette Base 色块）。
 
+账号卡的登录态切换（未登录两个按钮 / 登录后只剩退出）由 `check_login.py` 第 6 节覆盖。
+
 用法：QT_QPA_PLATFORM=offscreen uv run python scripts/check_setting_page.py
 """
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # 项目根
+
+# 隔离配置目录：本脚本构造 SettingPage，而账号卡会读 cfg 里的 cookie / 账号信息。
+# 不隔离就会加载用户真实的 config.json——副标题长度随用户状态变、断言不再确定，
+# 存过头像 URL 时还会真排一次缩略图请求把脚本拖住。
+os.environ["APPDATA"] = tempfile.mkdtemp(prefix="biliemoji-check-setting-")
 
 from PySide6.QtWidgets import QApplication
 
@@ -84,9 +93,10 @@ settle()
 
 print("== 1. 功能控件仍在（槽函数按属性名取用，改名即崩） ==")
 NAMES = [
-    "cookieEdit",
-    "saveBtn",
     "verifyBtn",
+    "scanLoginBtn",
+    "manualCookieBtn",
+    "logoutBtn",
     "dirEdit",
     "browseBtn",
     "openDirBtn",
@@ -174,9 +184,8 @@ check(
     f"改路径后卡片副标题同步（实际 {page.dirCard.card.contentLabel.text()!r}）",
 )
 
-print("== 4. 可展开卡片能展开（Cookie / 下载目录） ==")
-for name, card in (("Cookie", page.cookieCard), ("下载目录", page.dirCard)):
-    # Cookie 卡在未配置 Cookie 时会自动展开，先收起再量收起态高度
+print("== 4. 可展开卡片能展开（下载目录） ==")
+for name, card in (("下载目录", page.dirCard),):
     card.setExpand(False)
     wait_until(lambda c=card: not c.expandAni.state())
     folded = card.height()
@@ -191,20 +200,10 @@ for name, card in (("Cookie", page.cookieCard), ("下载目录", page.dirCard)):
     wait_until(lambda c=card, f=folded: c.height() <= f)
     check(card.height() == folded, f"{name} 卡收起复原（{card.height()} == {folded}）")
 
-print("== 4b. 未填 Cookie 时默认展开（首次使用不用先找 ⌄） ==")
-from app.common.config import cfg
-
-fresh = SettingPage()
-fresh.show()
-settle()
-check(
-    fresh.cookieCard.isExpand == (not cfg.cookie.value.strip()),
-    f"Cookie 卡展开态与「是否已配置 Cookie」一致（已配置={bool(cfg.cookie.value.strip())}，"
-    f"展开={fresh.cookieCard.isExpand}）",
-)
-fresh.close()
-
 print("== 5. 窄窗口下右侧控件不被裁（最小窗口 820 - 侧栏 150 - 页边距 72 ≈ 600） ==")
+# 账号头像未登录时是隐藏的，这里先让它显形——量的是「登录之后」那种最挤的排布。
+# 不显形就量不到它，等于漏测（隐藏控件的 geometry 是陈旧的，还会算出假重叠）。
+page.avatar.setVisible(True)
 page.resize(600, 760)
 settle(8)
 for name, card, widget in (
@@ -213,6 +212,8 @@ for name, card, widget in (
     ("保存下载设置", page.saveDownloadCard, page.downloadSaveBtn),
     ("主题", page.themeCard, page.themeCombo),
     ("验证", page.verifyCard, page.verifyBtn),
+    ("扫码登录", page.loginCard, page.scanLoginBtn),
+    ("手动填写", page.loginCard, page.manualCookieBtn),
 ):
     right = widget.geometry().right()
     check(
@@ -228,6 +229,8 @@ for name, card, label, widget in (
     ("代理", page.proxyCard, page.proxyCard.contentLabel, page.proxyEdit),
     ("线程数", page.threadCard, page.threadCard.contentLabel, page.threadSpin),
     ("主题", page.themeCard, page.themeCard.contentLabel, page.themeCombo),
+    # 账号卡右侧是「头像 + 按钮」两个控件，贴副标题最近的是头像
+    ("登录账号", page.loginCard, page.loginCard.contentLabel, page.avatar),
 ):
     gap = widget.geometry().left() - label.mapTo(card, label.rect().topRight()).x()
     check(gap > 0, f"{name}：副标题与右侧控件不重叠（间距 {gap}px）")

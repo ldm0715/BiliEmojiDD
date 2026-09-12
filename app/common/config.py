@@ -68,6 +68,11 @@ class AppConfig(QConfig):
     # 配置结构版本，只给迁移用，界面上不出现
     schema_version = ConfigItem("App", "schema", 0)
     cookie = ConfigItem("Account", "cookie", "")
+    # 上次登录的账号信息（扫码登录或「验证」成功后写入），只用来把昵称头像显示在
+    # 设置页上。**启动时不联网去刷**——省一次请求，也免得屏幕外脚本被拖住。
+    account_name = ConfigItem("Account", "accountName", "")
+    account_mid = ConfigItem("Account", "accountMid", 0)
+    account_face = ConfigItem("Account", "accountFace", "")
     download_dir = ConfigItem(
         "Download", "dir", str(Path.home() / "Downloads" / "biliemoji")
     )

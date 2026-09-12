@@ -25,7 +25,7 @@ from qfluentwidgets import (
     IconWidget,
     InfoBarPosition,
     LineEdit,
-    PasswordLineEdit,
+    MessageBox,
     PrimaryPushButton,
     PushButton,
     ScrollArea,
@@ -50,7 +50,7 @@ from app.common.config import (
     cfg,
 )
 from app.common.exception import cause_hint, show_bili_error
-from app.common.net import make_emoji
+from app.common.net import current_proxies, make_emoji
 from app.common.notify import (
     NEVER_DISMISS,
     notify_error,
@@ -63,8 +63,14 @@ from app.common.resource import app_icon
 from app.common.signal_bus import signal_bus
 from app.common.theme import bind_theme
 from app.common.version import is_newer
+from app.components.bili_login import fetch_account
 from app.components.disk_cache import MB, clear_all, total_size
 from app.components.download_runner import open_in_explorer
+from app.components.login_dialog import (
+    AccountAvatar,
+    show_cookie_dialog,
+    show_login_dialog,
+)
 from app.components.mirror_card import MirrorSettingCard
 from app.components.page_scaffold import BusyPushButton, tune_scroll, version_badge
 from app.components.proxy_probe import PROBE_NAME, PROBE_URL, probe_proxy
@@ -143,6 +149,9 @@ class SettingPage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._probed_proxy = ""  # 「测试」按下时的地址，供失败提示回显
+        # 扫码登录对话框。必须留引用：只 show() 不持有的话 Python 包装器会被回收，
+        # 对话框在轮询到一半时凭空消失
+        self._loginDialog = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -325,17 +334,20 @@ class SettingPage(QWidget):
     def _build_account_group(self) -> None:
         group = SettingCardGroup("账号", self.scrollWidget)
 
-        self.cookieCard = ExpandGroupSettingCard(
-            FluentIcon.VPN,
-            "B 站 Cookie",
-            "部分功能需要登录；Cookie 仅保存在本机配置中，不会上传",
+        # 一张卡承载「登录 + 账号」两件事，按登录态切换内容——不并排放两张卡。
+        # 三个按钮各自连自己的槽、靠显隐切换，**不做「一个按钮换文案换行为」**
+        # 那种状态耦合（那种写法迟早出双触发）
+        self.avatar = AccountAvatar(group)
+        self.manualCookieBtn = PushButton("手动填写", group)
+        self.scanLoginBtn = PrimaryPushButton("扫码登录", group)
+        self.logoutBtn = PushButton("退出登录", group)
+        self.loginCard = _WidgetSettingCard(
+            FluentIcon.PEOPLE,
+            "B 站账号",
+            "未登录 — 部分功能需要登录",
+            [self.avatar, self.manualCookieBtn, self.scanLoginBtn, self.logoutBtn],
             group,
         )
-        self.cookieEdit = PasswordLineEdit(self.cookieCard)
-        self.cookieEdit.setPlaceholderText("SESSDATA=...; bili_jct=...")
-        self.cookieEdit.setText(cfg.cookie.value)
-        self.saveBtn = PrimaryPushButton("保存", self.cookieCard)
-        self.cookieCard.addGroupWidget(_expand_row([self.cookieEdit, self.saveBtn]))
 
         self.verifyBtn = PushButton("验证", group)
         self.verifyCard = _WidgetSettingCard(
@@ -353,21 +365,66 @@ class SettingPage(QWidget):
             group,
         )
 
-        group.addSettingCards([self.cookieCard, self.verifyCard, self.configCard])
+        group.addSettingCards([self.loginCard, self.verifyCard, self.configCard])
         self.expandLayout.addWidget(group)
         self.accountGroup = group
 
-        # 还没填 Cookie 时直接展开：首次使用不用先找到那个 ⌄
-        if not cfg.cookie.value.strip():
-            self.cookieCard.setExpand(True)
-
-        self.saveBtn.clicked.connect(self._on_save)
+        self._sync_account_card()
+        self.manualCookieBtn.clicked.connect(self._on_manual_cookie)
+        self.scanLoginBtn.clicked.connect(self._on_login_clicked)
+        self.logoutBtn.clicked.connect(self._on_logout)
         self.verifyBtn.clicked.connect(self._on_verify)
 
-    def _on_save(self) -> None:
-        cookie = self.cookieEdit.text().strip().strip('"\'')
-        qconfig.set(cfg.cookie, cookie)
-        signal_bus.configChanged.emit()
+    def _sync_account_card(self) -> None:
+        """按登录态切换这张卡的样子。**不联网**——启动时不该为它发请求。
+
+        未登录给两条路（扫码为主、手动填写为退路），已登录只剩退出——两者
+        **不同时出现**：都登上去了还摆着「手动填写」，看着就多余。
+        """
+        name = cfg.account_name.value.strip()
+        mid = cfg.account_mid.value
+        logged_in = bool(cfg.cookie.value.strip())
+        # 文案刻意短：这一行在窄窗口（约 600px）下要和头像、按钮并排，
+        # 太长会把行顶出卡片
+        if name:
+            content = f"{name} · UID {mid}" if mid else name
+        elif logged_in:
+            content = "已登录"
+        else:
+            content = "未登录 — 部分功能需要登录"
+        self.loginCard.setContent(content)
+        self.avatar.set_url(cfg.account_face.value.strip())
+        self.manualCookieBtn.setVisible(not logged_in)
+        self.scanLoginBtn.setVisible(not logged_in)
+        self.logoutBtn.setVisible(logged_in)
+
+    def _on_login_clicked(self) -> None:
+        self._loginDialog = show_login_dialog(
+            self.window(),
+            on_success=self._on_login_ok,
+            proxies=current_proxies(),
+        )
+
+    def _on_manual_cookie(self) -> None:
+        self._loginDialog = show_cookie_dialog(
+            self.window(),
+            cookie=cfg.cookie.value,
+            on_save=self._on_cookie_saved,
+        )
+
+    def _on_login_ok(self, cookie: str) -> None:
+        """扫码确认后：Cookie 立即落盘生效，账号信息随后异步补上。"""
+        self._apply_cookie(cookie)
+        notify_success(
+            "登录成功",
+            "Cookie 已保存到本机配置",
+            parent=self,
+            position=InfoBarPosition.TOP_RIGHT,
+        )
+
+    def _on_cookie_saved(self, cookie: str) -> None:
+        """手动填写保存后：与扫码走同一条路，只是措辞不同。"""
+        self._apply_cookie(cookie)
         notify_success(
             "已保存",
             "Cookie 已保存到本机配置",
@@ -375,12 +432,71 @@ class SettingPage(QWidget):
             position=InfoBarPosition.TOP_RIGHT,
         )
 
+    def _on_logout(self) -> None:
+        """退出登录：只清登录态，下载目录、已下载文件与缓存都不动。"""
+        box = MessageBox(
+            "退出登录",
+            "将清除本机保存的 Cookie 与账号信息。\n"
+            "下载目录、已下载的文件与缓存都不受影响。",
+            self.window(),
+        )
+        # 组件库 MessageBox 的按钮默认是英文（OK / Cancel），必须自己写中文
+        box.yesButton.setText("退出")
+        box.cancelButton.setText("取消")
+        if not box.exec():
+            return
+        self._apply_cookie("")
+        notify_info(
+            "已退出登录",
+            "Cookie 与账号信息已清除",
+            parent=self,
+            position=InfoBarPosition.TOP_RIGHT,
+        )
+
+    def _apply_cookie(self, cookie: str) -> None:
+        """写入 Cookie 并同步界面 —— 扫码 / 手动填写 / 退出登录**三条路的唯一汇合点**。
+
+        **换了值就先清掉上一个账号的昵称头像**：新的 nav 请求回来之前若继续显示
+        旧昵称，用户会以为登的还是那个号。
+        """
+        changed = cookie != cfg.cookie.value
+        qconfig.set(cfg.cookie, cookie)
+        if changed:
+            qconfig.set(cfg.account_name, "")
+            qconfig.set(cfg.account_mid, 0)
+            qconfig.set(cfg.account_face, "")
+        self._sync_account_card()
+        signal_bus.configChanged.emit()
+        self._refresh_account(cookie)
+
+    def _refresh_account(self, cookie: str = "") -> None:
+        """查一次「当前登的是谁」并记下来。拿不到就静默——不拿它当错误报。"""
+        cookie = (cookie or cfg.cookie.value).strip()
+        if not cookie:
+            return
+        # 代理在主线程读好再交给 worker：worker 线程不碰 cfg（见 net.py 模块说明）
+        proxies = current_proxies()
+        run_task(
+            lambda: fetch_account(cookie, proxies=proxies),
+            on_success=self._on_account,
+            on_error=lambda _e: None,
+        )
+
+    def _on_account(self, account) -> None:
+        if account is None:
+            return
+        qconfig.set(cfg.account_name, account.name)
+        qconfig.set(cfg.account_mid, account.mid)
+        qconfig.set(cfg.account_face, account.face)
+        self._sync_account_card()
+
     def _on_verify(self) -> None:
-        cookie = self.cookieEdit.text().strip().strip('"\'')
+        """验证**生效的** Cookie —— 不再读某个输入框，那就是配置里这一个值。"""
+        cookie = cfg.cookie.value.strip()
         if not cookie:
             notify_warning(
-                "未填写 Cookie",
-                "请先填写 Cookie 再验证",
+                "未登录",
+                "请先扫码登录或手动填写 Cookie",
                 parent=self,
                 position=InfoBarPosition.TOP_RIGHT,
             )
@@ -406,6 +522,8 @@ class SettingPage(QWidget):
             position=InfoBarPosition.TOP_RIGHT,
             duration=5000,
         )
+        # 顺手把昵称头像补上：验证过了说明 Cookie 可用，账号信息也该拿得到
+        self._refresh_account()
 
     # ---- 下载 ----
     def _build_download_group(self) -> None:

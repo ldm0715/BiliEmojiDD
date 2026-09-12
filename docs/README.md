@@ -25,6 +25,7 @@ B 站表情包 / 收藏集（装扮）下载器 GUI：PySide6 + QFluentWidgets �
 | [update_and_packaging.md](update_and_packaging.md) | **检查更新与打包发布**：版本号单点维护、GitHub Release 检查与更新弹窗、下载加速镜像与 SHA-256 校验、`CHANGES.md` 发版流程、Nuitka + NSIS 打包与工作流 |
 | [reload_media.md](reload_media.md) | **重新加载**：图片 / 视频加载失败后的右键菜单与可点击失败态、三层缓存作废的顺序、`forget` 不能误删下载产物 |
 | [gif_preview.md](gif_preview.md) | **GIF 标识与动图预览**：角标判定口径、原始字节只在 `image_cache` 里、悬浮播放与查看器自动播放、`QMovie(None)` 段错误 |
+| [login.md](login.md) | **扫码登录**：web 端二维码接口与状态机、Cookie 提取的双路径、专用会话工厂的浏览器 UA、轮询线程模型与关窗竞态、`segno` 二维码绘制、账号信息展示 |
 
 ## 快速上手
 
