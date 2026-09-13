@@ -243,5 +243,9 @@ class MainWindow(FluentWindow):
                 return
         # 仅清除尚未开始的任务；运行中的下载在确认退出后随进程结束
         task_manager.clear_pending()
+        # 设置页里「改了但还没失焦」的输入（下载目录 / 代理地址）在此补写：
+        # 点 X / Alt+F4 关窗时输入框不一定发 editingFinished，不补写就会出现
+        # 「界面改了、文件里没改」。放在 accept 之后：用户取消关窗时输入框里的值该留着。
+        self.settingPage.commit_pending_edits()
         video_cache.cleanup()  # 删掉本会话的视频临时目录
         event.accept()

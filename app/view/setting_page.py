@@ -282,7 +282,7 @@ class SettingPage(QWidget):
         )(title, content, parent=self, position=InfoBarPosition.TOP_RIGHT)
 
     def _on_auto_update_toggled(self, enabled: bool) -> None:
-        # 即时生效，不进「保存下载设置」（同代理开关）
+        # 即时生效：设置页所有开关 / 下拉 / 输入都是「改完即落库」，没有保存按钮
         qconfig.set(cfg.auto_check_update, enabled)
 
     def _on_mirror_changed(self, index: int) -> None:
@@ -573,9 +573,17 @@ class SettingPage(QWidget):
         self.openDirBtn = PushButton("打开下载文件夹", self.dirCard)
         self.dirCard.addWidget(_button_box([self.browseBtn, self.openDirBtn]))
         self.dirCard.addGroupWidget(_expand_row([self.dirEdit]))
-        # 副标题跟随路径（纯展示同步，保存逻辑仍读 dirEdit）；
+        # 副标题跟随路径（纯展示同步）；
         # ExpandSettingCard 自身没有 setContent，标题行在 .card 上
         self.dirEdit.textChanged.connect(self.dirCard.card.setContent)
+        # 空目录不是合法状态（下载会落到当前工作目录），所以清空后失焦会被填回来
+        self.dirCard.setToolTip(
+            "改完按回车或点到别处立即生效。\n"
+            "目录不能为空：清空后焦点移开会自动填回当前目录。"
+        )
+        self.dirCard.installEventFilter(
+            ToolTipFilter(self.dirCard, 500, ToolTipPosition.TOP)
+        )
 
         # 代理 = 往 requests 里填的那个 proxies 值，就一行地址。
         # 开关关着时地址框不可编辑，且应用彻底直连（连系统代理都不读，见 app/common/net.py）
@@ -626,26 +634,20 @@ class SettingPage(QWidget):
         self.threadCard = _WidgetSettingCard(
             FluentIcon.SPEED_HIGH,
             "下载线程数",
-            "同时下载的文件数（1–16）",
+            "同时下载的文件数（1–16），改完即时生效",
             [self.threadSpin],
             group,
         )
 
-        self.downloadSaveBtn = PrimaryPushButton("保存", group)
-        self.saveDownloadCard = _WidgetSettingCard(
-            FluentIcon.SAVE,
-            "保存下载设置",
-            "下载目录与线程数修改后需保存才生效（代理改完即时生效）",
-            [self.downloadSaveBtn],
-            group,
-        )
-
+        # 这一组**没有「保存」按钮**：下载目录、线程数、代理全是改完即时生效。
+        # 手动保存那套的代价是「界面和配置文件可以不一致」——用户在框里清空了地址
+        # 却没点保存，文件里那个旧值会一直留着（代理开关因此被自动拨开过，见
+        # app/common/config.py::_migrate 的说明）。
         group.addSettingCards(
             [
                 self.dirCard,
                 self.proxyCard,
                 self.threadCard,
-                self.saveDownloadCard,
             ]
         )
         self.expandLayout.addWidget(group)
@@ -653,12 +655,14 @@ class SettingPage(QWidget):
 
         self.browseBtn.clicked.connect(self._on_browse)
         self.openDirBtn.clicked.connect(self._on_open_dir)
-        self.downloadSaveBtn.clicked.connect(self._on_save_download)
         self.proxyTestBtn.clicked.connect(self._on_test_proxy)
         self.proxySwitch.checkedChanged.connect(self._on_proxy_toggled)
-        # 代理即时生效，不等「保存下载设置」——改了 IP 却忘了点保存，其它请求还在用旧地址，
+        # 三条都即时生效，不等「保存」——改了 IP 却忘了保存，其它请求还在用旧地址，
         # 而报错里显示的又是配置里那个旧值，根本对不上（踩过）
         self.proxyEdit.editingFinished.connect(self._autosave_proxy)
+        self.dirEdit.editingFinished.connect(self._autosave_dir)
+        # 接线放在 setRange/setValue 之后：构造期那次 setValue 早于 connect，不会误写
+        self.threadSpin.valueChanged.connect(self._autosave_threads)
 
     def _sync_proxy_enabled(self, enabled: bool) -> None:
         """开关关着时连填都填不了——「没开代理」这件事在界面上就是确定的。"""
@@ -695,11 +699,12 @@ class SettingPage(QWidget):
         self._sync_proxy_enabled(enabled)
 
     def _autosave_proxy(self) -> None:
-        """地址框回车 / 失焦即保存。
+        """地址框回车 / 失焦即落库（`MainWindow.closeEvent` 的补写也走它）。
 
         静默版：地址不合法就不写也不弹提示（切个焦点就弹一次太吵），
-        报错留给显式的「保存」与「测试」。空地址照写——`current_proxies()` 本来就把
-        「开着但地址为空」当直连，写进去才能让副标题与实际行为一致。
+        报错留给显式的「测试」。空地址照写——`current_proxies()` 本来就把
+        「开着但地址为空」当直连，写进去才能让副标题与实际行为一致，
+        也免得「界面清空了、文件里还留着老地址」。
         """
         text = self.proxyEdit.text().strip()
         if " " in text:
@@ -713,7 +718,8 @@ class SettingPage(QWidget):
     def _current_proxy(self) -> str | None:
         """按当前控件值取代理地址；不合法时弹提示并返回 None。
 
-        保存与「测试」共用这一个入口。返回空串表示不使用代理。
+        「测试」用这一个入口（以前「保存」也共用；保存按钮已删）：
+        返回空串表示不使用代理。
         """
         if not self.proxySwitch.isChecked():
             return ""
@@ -797,40 +803,51 @@ class SettingPage(QWidget):
         directory = QFileDialog.getExistingDirectory(self, "选择下载目录", start)
         if directory:
             self.dirEdit.setText(directory)
+            self._autosave_dir()  # setText 不发 editingFinished，手动落库
 
     def _on_open_dir(self) -> None:
         path = Path(self.dirEdit.text().strip() or cfg.download_dir.value)
         path.mkdir(parents=True, exist_ok=True)
         open_in_explorer(path, self)
 
-    def _on_save_download(self) -> None:
-        directory = self.dirEdit.text().strip()
-        if not directory:
-            notify_warning(
-                "下载目录为空",
-                "请选择下载目录",
-                parent=self,
-                position=InfoBarPosition.TOP_RIGHT,
-            )
+    # ---- 下载组的即时生效（没有「保存」按钮） ----
+
+    def _autosave_dir(self) -> None:
+        """下载目录：回车 / 失焦即落库。
+
+        空目录**不写**（写了下载会落到当前工作目录，等于把用户的文件撒到不知哪里），
+        并把输入框**回填成当前生效值** —— 界面不允许停在一个配置文件里没有的路径上，
+        否则又回到「界面和文件不一致」那类 bug。静默处理，不弹提示：切个焦点就弹一次太吵。
+        """
+        text = self.dirEdit.text().strip()
+        if not text:
+            self._set_dir_text(cfg.download_dir.value)
             return
-        proxy_text = self._current_proxy()
-        if proxy_text is None:  # 校验未过，提示已弹
+        if text == cfg.download_dir.value:
             return
-        qconfig.set(cfg.download_dir, directory)
-        qconfig.set(cfg.proxy_enabled, self.proxySwitch.isChecked())
-        # 关开关时不清空地址：下次打开还在。current_proxies() 只看开关
-        if proxy_text:
-            qconfig.set(cfg.proxy, proxy_text)
-            self._set_proxy_text(proxy_text)  # 回填规范化后的地址
-        self._refresh_proxy_content()
-        qconfig.set(cfg.max_workers, self.threadSpin.value())
+        qconfig.set(cfg.download_dir, text)
+        self._set_dir_text(text)
+        # 主页英雄卡那一行显示的就是下载目录，靠这个信号刷新
         signal_bus.configChanged.emit()
-        notify_success(
-            "已保存",
-            "下载目录与线程数已保存到本机配置",
-            parent=self,
-            position=InfoBarPosition.TOP_RIGHT,
-        )
+
+    def _set_dir_text(self, text: str) -> None:
+        """回填目录并保持卡片副标题同步（副标题挂在 textChanged 上，setText 会带动它）。"""
+        if self.dirEdit.text() != text:
+            self.dirEdit.setText(text)
+
+    def _autosave_threads(self, value: int) -> None:
+        """线程数：拨一下即落库（与缓存组的上限 SpinBox 同一套）。"""
+        qconfig.set(cfg.max_workers, int(value))
+
+    def commit_pending_edits(self) -> None:
+        """把「改了但还没失焦」的输入补写一次。
+
+        由 `MainWindow.closeEvent` 在关窗那一刻调用：编辑完直接点 X / Alt+F4 时，
+        输入框不一定会发 `editingFinished`，不补写就会出现「界面改了、文件里没改」。
+        `qconfig.set` 是同步落盘（值变了就写文件），所以这里不需要等任何异步。
+        """
+        self._autosave_dir()
+        self._autosave_proxy()
 
     # ---- 缓存 ----
     def _build_cache_group(self) -> None:

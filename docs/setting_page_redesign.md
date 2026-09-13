@@ -15,7 +15,8 @@
 **硬约束（用户要求）：只改界面代码，不动功能代码。** 落实为三条：
 
 1. 所有槽函数 `_on_save` / `_on_verify` / `_on_verify_ok` / `_on_browse` / `_on_open_dir` /
-   `_on_save_download` / `_on_theme_changed` / `_sync_theme_combo` / `_sync_theme_icon` **逐字未改**；
+   `_on_save_download` / `_on_theme_changed` / `_sync_theme_combo` / `_sync_theme_icon` **逐字未改**
+   （`_on_save_download` 后来随「保存下载设置」一起删掉了，见本节末尾的「后续变更」）；
 2. 槽函数引用的控件**属性名与类型全部保留**（`cookieEdit` / `saveBtn` / `verifyBtn` / `dirEdit` /
    `browseBtn` / `openDirBtn` / `protoCombo` / `hostEdit` / `portSpin` / `threadSpin` /
    `downloadSaveBtn` / `themeCombo`）；
@@ -64,7 +65,6 @@ SettingPage(QWidget)
 | 下载 | 下载目录 | `ExpandGroupSettingCard` | 标题行：`browseBtn`「选择文件夹」+ `openDirBtn`「打开下载文件夹」；展开区：`dirEdit` |
 | 下载 | 代理 | `_WidgetSettingCard` | `proxySwitch` + `proxyEdit` + `proxyTestBtn`（后改，原为协议下拉 + 主机 + 端口，见 `proxy_diagnostics.md`） |
 | 下载 | 下载线程数 | `_WidgetSettingCard` | `threadSpin` |
-| 下载 | 保存下载设置 | `_WidgetSettingCard` | `downloadSaveBtn`「保存」 |
 | 外观 | 应用主题 | `_WidgetSettingCard` | `themeCombo` |
 | 外观 | 字体渲染 | `_WidgetSettingCard` | `fontEngineCombo`（后加，见 `app_shell.md`） |
 
@@ -157,5 +157,17 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py      # 出�
 `check_image_viewer`）均无回归，全部 **ALL PASSED**。
 
 截图 `screenshots/setting_page_light.png` / `setting_page_dark.png` 与参考图逐行比对；
-真实交互（保存 Cookie、验证权限、选择 / 打开目录、保存下载设置、切主题）需人工
+真实交互（保存 Cookie、验证权限、选择 / 打开目录、改下载目录 / 线程数、切主题）需人工
 `uv run python main.py` 跑一遍。
+
+### 后续变更（本文档记的是改版当时的状态）
+
+- **「保存下载设置」已删除**（2026-09）：下载目录、线程数、代理改成全部即时生效，
+  `downloadSaveBtn` / `saveDownloadCard` / `_on_save_download` 三个名字不再存在。
+  原因是手动保存让「界面」和「配置文件」可以不一致——用户在框里清空了地址却没点保存，
+  文件里那个旧值会一直留着，后来成了「装新版本后代理开关被自动打开」的源头。
+  下载组的卡片数因此从 4 张变成 3 张（`check_setting_page.py` 的 `[5, 3, 3, 2, 2]`），
+  新增断言见该脚本第 3b 节。详见 [proxy_diagnostics.md](proxy_diagnostics.md)。
+- 代理行早期是「协议下拉 + 主机 + 端口」，`protoCombo` / `hostEdit` / `portSpin` 已换成
+  `proxySwitch` + `proxyEdit`；`cookieEdit` / `saveBtn`（Cookie 卡）也已随扫码登录改版删除。
+

@@ -6,8 +6,8 @@ import os
 from pathlib import Path
 
 from qfluentwidgets import (
-    BoolValidator,
     ConfigItem,
+    ConfigValidator,
     EnumSerializer,
     OptionsConfigItem,
     OptionsValidator,
@@ -62,6 +62,26 @@ FONT_ENGINES = ("default", "freetype")
 CONFIG_SCHEMA = 1
 
 
+class _StrictBoolValidator(ConfigValidator):
+    """只认真布尔；非法值回落成**这一项自己的默认值**。
+
+    别用上游的 `BoolValidator`：它是 `OptionsValidator([True, False])`，而
+    `OptionsValidator.correct()` 把非法值兜成 `options[0]` —— **恒为 `True`**，
+    与这一项声明的默认值无关。于是配置文件里出现 `"proxyEnabled": "false"` /
+    `null` 这类非布尔值（手改、外部工具、传输损坏）时，"代理开关"会被读成**开**，
+    并被 `_ensure_persisted()` 固化成 `true`。
+    """
+
+    def __init__(self, default: bool) -> None:
+        self._default = bool(default)
+
+    def validate(self, value) -> bool:
+        return isinstance(value, bool)
+
+    def correct(self, value) -> bool:
+        return value if isinstance(value, bool) else self._default
+
+
 class AppConfig(QConfig):
     """应用配置。所有字段为可序列化的基本类型。"""
 
@@ -82,10 +102,13 @@ class AppConfig(QConfig):
     download_dir = ConfigItem(
         "Download", "dir", str(Path.home() / "Downloads" / "biliemoji")
     )
-    default_gif = ConfigItem("Download", "gif", True)
+    default_gif = ConfigItem("Download", "gif", True, _StrictBoolValidator(True))
     max_workers = RangeConfigItem("Download", "maxWorkers", 8, RangeValidator(1, 16))
-    # 代理总开关：关 = 彻底直连（应用也不读系统代理，见 app/common/net.py）
-    proxy_enabled = ConfigItem("Download", "proxyEnabled", False, BoolValidator())
+    # 代理总开关：关 = 彻底直连（应用也不读系统代理，见 app/common/net.py）。
+    # **一律默认关**：不再有任何「老配置里有地址就自动置开」的迁移，见 _migrate
+    proxy_enabled = ConfigItem(
+        "Download", "proxyEnabled", False, _StrictBoolValidator(False)
+    )
     proxy = ConfigItem("Download", "proxy", "")
     # 磁盘缓存上限（MB）：图片字节 + 接口响应，超限按 LRU 淘汰
     cache_limit_mb = RangeConfigItem("Cache", "limitMB", 512, RangeValidator(64, 8192))
@@ -100,7 +123,9 @@ class AppConfig(QConfig):
         "Appearance", "fontEngine", "default", OptionsValidator(list(FONT_ENGINES))
     )
     # 启动时静默检查一次新版本；无新版 / 失败都不打扰，不想联网的用户一拨即关
-    auto_check_update = ConfigItem("Update", "autoCheck", True, BoolValidator())
+    auto_check_update = ConfigItem(
+        "Update", "autoCheck", True, _StrictBoolValidator(True)
+    )
     # GitHub 下载加速镜像。"" = 直连，"auto" = 直连失败后依次试内置 + 自定义镜像。
     # **不用 OptionsValidator**：用户可以自己加源，取值集合是动态的
     gh_mirror = ConfigItem("Update", "ghMirror", "")
@@ -130,20 +155,23 @@ def _raw_config() -> dict:
 def _migrate(raw: dict) -> None:
     """一次性迁移。**只改内存**，落盘统一交给 `_ensure_persisted`。
 
-    代理开关是后加的：老配置里填过代理地址的，视为「已启用」（升级不断网）。
+    目前**没有任何迁移动作**，只维护 `schema_version` 这个熄火标记。
+
+    这里曾经有一条「老配置里填过代理地址 → 把 `proxyEnabled` 置开」的迁移
+    （0.1.x 时代没有开关、有地址就通过环境变量走代理，所以「升级不断网」）。
+    它已删除：前提是「文件里有地址 ⇒ 用户正在用代理」，而那之后就只剩
+    「用户以前填过、后来关掉了开关」——`关开关不清空地址`，于是残留地址会长期留在
+    文件里，任何一次配置回落（文件被删 / 改坏、卸载重装保留 `%APPDATA%`）都会把
+    用户明确关掉的开关重新翻成「开」。真实报障：装新版本后代理开关默认是打开的。
+    现在**代理一律默认关**，老用户要用自己拨一次（地址还在地址框里，一步操作）。
 
     熄火靠 `schema_version` 这个显式标记，**不能靠「写完盘那个键就存在了」**——
     `qconfig.set` 在值没变化时直接 return、根本不落盘（上游 `config.py:299`）。
-    于是一旦出现「内存里已经是 True 而文件里仍没有 proxyEnabled 键」，旧写法就
-    永远处于武装状态：此后任何一次配置回落到默认值（`qconfig.load` 被
-    `@exceptionHandler` 静默吞掉的解析失败、文件被外部改坏 / 清空、换安装目录）
-    都会在下次启动被它把用户明确关掉的开关重新翻成「开」。真实报障就是这条。
+    于是一旦出现「内存里已经是 X 而文件里仍没有某个键」，旧写法就永远处于武装状态。
+    加新迁移时 +1 这个常量。
     """
     if cfg.schema_version.value >= CONFIG_SCHEMA:
         return
-    download = raw.get("Download")
-    if isinstance(download, dict) and "proxyEnabled" not in download and cfg.proxy.value:
-        cfg.proxy_enabled.value = True
     cfg.schema_version.value = CONFIG_SCHEMA
 
 

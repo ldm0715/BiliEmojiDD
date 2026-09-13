@@ -40,6 +40,8 @@ uv run ruff check .              # 代码检查
    - 新增枚举类配置项必须配 `EnumSerializer`，否则 `qconfig.save()` 的 `json.dump` 抛 `TypeError`。
    - **新增普通字段不用写迁移**：新键由 `config.py::_ensure_persisted()` 启动时自动补写，默认值本身要能表达「没有」（如 `cookieCheckedAt=0` / `cookieCheckedHash=""`）。只有需要**根据老数据推断新值**时才动 `CONFIG_SCHEMA`（+1）和 `_migrate`，而且迁移的熄火标记必须是那个显式版本号——**不能靠「文件里有没有这个键」**：`qconfig.set` 在值没变时根本不落盘（上游 `config.py:299`），靠这个判据会永久武装、把用户明确改过的设置反复翻回去。踩坑全过程见 [proxy_diagnostics.md](proxy_diagnostics.md)。
    - `qconfig.set(item, value)` 才落盘；直接写 `cfg.item.value = v` 只改内存（迁移里的临时改动就靠这个，落盘统一交 `_ensure_persisted`）。
+   - **别用上游的 `BoolValidator`**：它是 `OptionsValidator([True, False])`，而 `OptionsValidator.correct()` 把非法值兜成 `options[0]`——**恒为 `True`**，与这一项自己的默认值无关。配置里出现 `"false"` / `null` 这类非布尔值时，布尔项会被读成「开」（`proxyEnabled` 就这么被自动打开过）。用 `config.py::_StrictBoolValidator(该项默认值)`，非布尔值回落各自的默认值。
+   - **不让界面和文件有机会不一致**：设置项一律「改完即落库」（`qconfig.set` 在 `editingFinished` / `valueChanged` / `checkedChanged` 里），**不做「点保存才生效」那套**。手动保存会让用户在框里清空了值、文件里却一直留着旧值，而这类残留正好是「某开关下次启动自己变了」的源头。改完直接关窗的边角由 `MainWindow.closeEvent` → `SettingPage.commit_pending_edits()` 兜住。
 6. **biliemoji**
    - 模型类从 `biliemoji.models` 导入（`EmotePackage` 等顶层不导出）。
    - `all_packages()` 返回的包**不含完整 emote**（只含元信息），进详情必须另调 `certain_emoji_typed(id)`。

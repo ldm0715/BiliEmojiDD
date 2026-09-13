@@ -60,7 +60,7 @@ uv run python main.py
 - [收藏集视频预览](docs/collection_video.md) — 内容分页 Pivot、内嵌播放器 + 缩略图选择条、临时缓存与黑背景坑
 - [搜索历史 + 磁盘缓存 + 应用标识](docs/search_and_cache.md) — 浮层历史面板、图片/接口落盘缓存与容量设置、窗口图标与版本号
 - [主页（欢迎页）](docs/home_page.md) — 英雄卡 + 功能入口卡 + 快速上手 / 关于、静态展示图方案、性能与布局坑
-- [代理](docs/proxy_diagnostics.md) — 开关 + 单地址框、`trust_env=False` 断开系统代理、`net.py` 联网工厂、ProxyError 成因表与「测试」按钮
+- [代理](docs/proxy_diagnostics.md) — 开关 + 单地址框（**一律默认关**）、`trust_env=False` 断开系统代理、`net.py` 联网工厂、ProxyError 成因表与「测试」按钮
 - [应用外壳](docs/app_shell.md) — 全局字体 LXGW 文楷等宽、FreeType 渲染后端、消息提示统一挂内容区、切页去掉位移动画
 - [检查更新与打包发布](docs/update_and_packaging.md) — 版本号单点维护、更新弹窗、下载加速镜像与校验、`CHANGES.md` 发版流程、Nuitka + NSIS 与工作流
 - [重新加载](docs/reload_media.md) — 图片 / 视频加载失败后的右键菜单与可点击失败态、缓存作废顺序

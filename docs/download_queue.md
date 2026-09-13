@@ -75,7 +75,9 @@ download_package_batch(ids, dest, *, gif=None, max_workers=None, on_progress=Non
 - 文件名安全：目录 `dest / f"{清洗名[:60]} [{包ID}]"`（含包 ID 防同名覆盖、截断超长名），文件 `清洗名[:60] + ext`。
 
 > ⚠️ **代理部分（本节与第 6 节）已过时**：`ProxyEnvManager` 与环境变量兜底已删除，
-> 现在是「一个开关 + 一个地址框 + `trust_env=False`」。以 `proxy_diagnostics.md` 为准。
+> 现在是「一个开关 + 一个地址框 + `trust_env=False`」，且**代理一律默认关**。
+> 另外「下载」组原来的「保存下载设置」按钮**也删掉了**（下载目录 / 线程数 / 代理
+> 全部改完即落库）。以 `proxy_diagnostics.md` 为准。
 
 ### 5. 下载设置（设置页「下载」卡）
 

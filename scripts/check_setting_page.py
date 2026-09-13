@@ -6,6 +6,9 @@
 1. 功能控件属性名 / 类型 / 取值全部保留（槽函数逐字未改，靠它们工作）；
 2. 五个分组 + 每组卡片数；
 3. 下载目录副标题跟随 `dirEdit`（纯展示同步）；
+3b. **下载组即时生效**（没有「保存」按钮）：线程数 / 下载目录改完即落库、
+   空目录回填、`commit_pending_edits()` 补写未失焦的编辑，以及 **cfg→UI 方向**
+   （配置是关时页面必须显示关——现有断言全是反方向）；
 4. 可展开卡片展开后变高；
 5. 窄窗口下右侧控件不被裁（代理行最挤）；
 6. 卡片随主题重刷 QSS + 主题下拉闭合态图标随主题重新取色；
@@ -17,6 +20,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -43,9 +47,11 @@ from qfluentwidgets import (
     SettingCardGroup,
     SpinBox,
     Theme,
+    qconfig,
     setTheme,
 )
 
+from app.common.config import APP_NAME, CONFIG_FILE, cfg
 from app.view.setting_page import SettingPage
 
 setTheme(Theme.LIGHT)
@@ -103,7 +109,6 @@ NAMES = [
     "proxySwitch",
     "proxyEdit",
     "threadSpin",
-    "downloadSaveBtn",
     "themeCombo",
     "fontEngineCombo",
 ]
@@ -174,7 +179,7 @@ group_x = groups[0].titleLabel.mapTo(page, groups[0].titleLabel.rect().topLeft()
 card_x = _cards_of(groups[0])[0].mapTo(page, page.rect().topLeft()).x()
 check(group_x == card_x, f"分组标题 / 卡片左对齐（{group_x} / {card_x}）")
 counts = [len(_cards_of(g)) for g in groups]
-check(counts == [5, 3, 4, 2, 2], f"每组卡片数 5/3/4/2/2（实际 {counts}）")
+check(counts == [5, 3, 3, 2, 2], f"每组卡片数 5/3/3/2/2（实际 {counts}）")
 
 print("== 3. 下载目录副标题跟随 dirEdit ==")
 page.dirEdit.setText("X:/tmp/biliemoji")
@@ -183,6 +188,91 @@ check(
     page.dirCard.card.contentLabel.text() == "X:/tmp/biliemoji",
     f"改路径后卡片副标题同步（实际 {page.dirCard.card.contentLabel.text()!r}）",
 )
+
+print("== 3b. 下载组即时生效（没有「保存」按钮） ==")
+# 先钉住「跑在隔离的配置目录里」——下面一堆「配置里应该是 X」的断言，
+# 不确认这一点，结论可能是拿用户真实的 config.json 得出的
+check(
+    Path(CONFIG_FILE).parent.name == APP_NAME
+    and Path(CONFIG_FILE).parent.parent == Path(os.environ["APPDATA"]),
+    f"配置写在隔离目录里（{CONFIG_FILE}）",
+)
+check(
+    not hasattr(page, "downloadSaveBtn") and not hasattr(page, "saveDownloadCard"),
+    "「保存下载设置」卡片与按钮已删除",
+)
+check(not hasattr(page, "_on_save_download"), "保存槽 _on_save_download 已删除")
+
+# cfg→UI 方向：现有断言全是「先 setChecked 再读 cfg」的单向，把初始化写成取反也照样全绿
+qconfig.set(cfg.proxy_enabled, False)
+qconfig.set(cfg.proxy, "")
+fresh = SettingPage()
+fresh.resize(900, 700)
+fresh.show()
+settle()
+check(
+    fresh.proxySwitch.isChecked() is cfg.proxy_enabled.value,
+    f"开关初值跟随配置（开关 {fresh.proxySwitch.isChecked()} / 配置 {cfg.proxy_enabled.value}）",
+)
+check(fresh.proxySwitch.isChecked() is False, "配置为关时，新页面显示的就是关")
+check(not fresh.proxyEdit.isEnabled(), "配置为关时地址框不可编辑")
+check(
+    "已关闭" in fresh.proxyCard.contentLabel.text(),
+    f"配置为关时副标题说直连（实际 {fresh.proxyCard.contentLabel.text()!r}）",
+)
+fresh.close()
+
+# 线程数：拨一下即落库。注意 SpinBox.setValue 只在值**真的变化**时才发 valueChanged，
+# 所以断言必须换一个不同的值；顺手把这条 Qt 语义也钉住
+qconfig.set(cfg.max_workers, 5)
+page.threadSpin.setValue(3)
+settle()
+check(cfg.max_workers.value == 3, f"线程数改完即落库（{cfg.max_workers.value}）")
+page.threadSpin.setValue(3)
+settle()
+check(cfg.max_workers.value == 3, "同值再设一次不发信号、也不落库（SpinBox 语义）")
+
+# 下载目录：回车 / 失焦即落库
+live_dir = str(Path(os.environ["APPDATA"]) / "dl-live")
+page.dirEdit.setText(live_dir)
+page.dirEdit.editingFinished.emit()  # = 回车 / 焦点移开
+settle()
+check(cfg.download_dir.value == live_dir, f"目录失焦即落库（{cfg.download_dir.value!r}）")
+
+# 空目录：不落库 + 回填当前生效值（界面不许停在一个配置文件里没有的路径上）
+page.dirEdit.setText("   ")
+page.dirEdit.editingFinished.emit()
+settle()
+check(cfg.download_dir.value == live_dir, "空目录不落库（保持上一个值）")
+check(
+    page.dirEdit.text() == live_dir,
+    f"空目录被回填成当前生效值（{page.dirEdit.text()!r}）",
+)
+check("不能为空" in page.dirCard.toolTip(), "目录卡 tooltip 写明空值会被回填")
+
+# 「改了但没失焦」→ commit_pending_edits 补写（关窗那一路走的就是它）
+pending_dir = str(Path(os.environ["APPDATA"]) / "dl-pending")
+page.dirEdit.setText(pending_dir)
+qconfig.set(cfg.proxy, "http://old.example:1")
+page.proxySwitch.setChecked(True)
+settle()
+page.proxyEdit.setText("pending.example:9999")
+# 这里**故意不**发 editingFinished：模拟「改完直接关窗」
+page.commit_pending_edits()
+settle()
+check(cfg.download_dir.value == pending_dir, "关窗前补写了下载目录")
+check(
+    cfg.proxy.value == "http://pending.example:9999",
+    f"关窗前补写了代理地址并规范化（{cfg.proxy.value!r}）",
+)
+raw = json.loads(Path(CONFIG_FILE).read_text(encoding="utf-8"))
+check(
+    raw["Download"]["dir"] == pending_dir
+    and raw["Download"]["proxy"] == "http://pending.example:9999",
+    "补写是同步落盘的（配置原文里也是新值）",
+)
+page.proxySwitch.setChecked(False)  # 收尾，别把「开着」留给后面的版式断言
+settle()
 
 print("== 4. 可展开卡片能展开（下载目录） ==")
 for name, card in (("下载目录", page.dirCard),):
@@ -209,7 +299,6 @@ settle(8)
 for name, card, widget in (
     ("代理-地址", page.proxyCard, page.proxyEdit),
     ("线程数", page.threadCard, page.threadSpin),
-    ("保存下载设置", page.saveDownloadCard, page.downloadSaveBtn),
     ("主题", page.themeCard, page.themeCombo),
     ("验证", page.verifyCard, page.verifyBtn),
     ("扫码登录", page.loginCard, page.scanLoginBtn),

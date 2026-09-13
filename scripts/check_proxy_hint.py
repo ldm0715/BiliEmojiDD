@@ -4,12 +4,15 @@
 2. 为旧「配代理软件」UI 写的那批函数确已删除；
 3. **每个联网入口的 Session 都 `trust_env = False`**——否则 requests 会读
    Windows 系统代理 / `HTTP_PROXY` 并覆盖显式传入的 proxies；
-4. 代理开关：关 → `current_proxies()` 为 None；保存代理不写任何代理环境变量；
+4. 代理开关：关 → `current_proxies()` 为 None；改代理不写任何代理环境变量；
 5. 设置页：开关关着地址框不可编辑、`_current_proxy()` 的规范化与拦截；
-5b. **代理即时生效**（改完不必点「保存下载设置」）+ 副标题显示生效值；
+5b. **即时生效**（下载组没有「保存」按钮，开关 / 地址框 / 下载目录 / 线程数都是改完即落库）
+    + 副标题显示生效值 + 清空地址框会真的把地址从配置里清掉；
 5c. 「测试」失败提示报的是被测地址与接口，不是 `cfg.proxy`；
 6. `cause_hint` 仍能沿异常链认出常见代理故障；
-7. **`proxyEnabled` 迁移只跑一次**——用户关掉的开关不会在下次启动被翻回「开」。
+7. **配置：代理一律默认关**——不再有「老配置里有地址就自动置开」的迁移
+   （那是「装新版本后代理开关默认是打开的」的根因）；布尔项的非法值回落各自默认值，
+   不会被上游 `BoolValidator` 兜成 `True`。
 
 用法：QT_QPA_PLATFORM=offscreen uv run python scripts/check_proxy_hint.py
 """
@@ -153,15 +156,21 @@ app.processEvents()
 page.proxySwitch.setChecked(True)
 page.proxyEdit.setText("127.0.0.1:7890")
 page.dirEdit.setText(str(Path(os.environ["APPDATA"]) / "dl"))
-page._on_save_download()
+# 下载组没有「保存」按钮了：地址框与目录都靠 editingFinished（回车 / 失焦）落库
+page.proxyEdit.editingFinished.emit()
+page.dirEdit.editingFinished.emit()
 app.processEvents()
 env_after = {k: os.environ.get(k) for k in env_before}
-check(env_before == env_after, f"保存代理不写任何代理环境变量（{env_after}）")
+check(env_before == env_after, f"改代理不写任何代理环境变量（{env_after}）")
 check(cfg.proxy.value == "http://127.0.0.1:7890", f"地址被规范化后落库（{cfg.proxy.value!r}）")
-check(cfg.proxy_enabled.value is True, "开关状态一并保存")
+check(cfg.proxy_enabled.value is True, "开关状态一并落库")
 check(
     page.proxyEdit.text() == "http://127.0.0.1:7890",
     f"规范化结果回填到输入框（{page.proxyEdit.text()!r}）",
+)
+check(
+    cfg.download_dir.value == str(Path(os.environ["APPDATA"]) / "dl"),
+    f"下载目录也即时落库（{cfg.download_dir.value!r}）",
 )
 
 print("== 5. 设置页取值与校验 ==")
@@ -193,9 +202,10 @@ check(page._current_proxy() is None, "开着开关却没填地址被拦下（不
 check("系统代理" in page.proxyCard.toolTip(), "tooltip 点明应用不读系统代理")
 check(PROBE_URL in page.proxyCard.toolTip(), f"tooltip 写明测试打哪个接口（{PROBE_URL}）")
 
-print("== 5b. 代理即时生效：不必点「保存下载设置」 ==")
+print("== 5b. 即时生效：下载组没有「保存」按钮 ==")
 # 真实踩过的坑：在框里换了 IP、按了「测试」，但没点保存 → 其它请求还在用旧地址，
-# 报错里显示的又是配置里那个旧值，看起来像「代理没接进请求」
+# 报错里显示的又是配置里那个旧值，看起来像「代理没接进请求」。
+# 现在整个下载组都是即时落库（代理开关 / 地址框 / 下载目录 / 线程数），没有保存按钮。
 qconfig.set(cfg.proxy, "http://old.example:1")
 page.proxySwitch.setChecked(True)
 page.proxyEdit.setText("new.example:8888")
@@ -221,6 +231,14 @@ check(cfg.proxy_enabled.value is False, "开关一拨就落库")
 check(current_proxies() is None, "关掉开关立刻直连")
 check("直连" in page.proxyCard.contentLabel.text(),
       f"副标题改说直连（{page.proxyCard.contentLabel.text()!r}）")
+
+# 清空地址框后失焦要**真的把地址从配置里清掉**——「界面看着是空的、文件里还留着
+# 老地址」正是代理开关被自动置开那类问题的源头（见 config.py::_migrate 的说明）
+page.proxyEdit.setText("")
+page.proxyEdit.editingFinished.emit()
+app.processEvents()
+check(cfg.proxy.value == "", f"清空地址框后失焦 → 配置里也清掉（{cfg.proxy.value!r}）")
+
 page.proxySwitch.setChecked(True)
 app.processEvents()
 # 密码只在副标题里打码，配置里存的仍是可用的完整地址
@@ -307,27 +325,41 @@ check(
 cfg.proxy_enabled.value = False
 cfg.proxy.value = ""
 
-# ---------------------------------------------------------------- 7. 配置迁移
-print("\n[7] proxyEnabled 迁移只跑一次（关掉的开关不会被翻回来）")
+# ---------------------------------------------------------------- 7. 配置默认值
+print("\n[7] 配置：代理一律默认关 + 布尔项的非法值不会变「开」")
 
 # 迁移在 import app.common.config 时就跑完了，只能开子进程按不同的初始文件重来。
 _PROBE = (
-    "from app.common.config import cfg, CONFIG_FILE;"
     "import json;"
-    "raw = json.loads(CONFIG_FILE.read_text(encoding='utf-8'));"
-    "print('RESULT', cfg.proxy_enabled.value,"
-    " raw['Download'].get('proxyEnabled'), cfg.schema_version.value)"
+    "from app.common.config import cfg, CONFIG_FILE;"
+    "raw = json.loads(CONFIG_FILE.read_text(encoding='utf-8'))"
+    " if CONFIG_FILE.is_file() else {};"
+    "print('RESULT', json.dumps({"
+    "'mem': cfg.proxy_enabled.value,"
+    "'disk': raw.get('Download', {}).get('proxyEnabled'),"
+    "'schema': cfg.schema_version.value,"
+    "'gif': cfg.default_gif.value,"
+    "'auto': cfg.auto_check_update.value,"
+    "'proxy': cfg.proxy.value,"
+    "'hasFile': CONFIG_FILE.is_file(),"
+    "}))"
 )
+_OLD_ADDRESS = "http://127.0.0.1:7890"
 
 
-def _boot_with(raw: dict) -> tuple[str, str, str]:
-    """用给定的 config.json 起一次配置模块，返回 (内存值, 落盘值, schema)。"""
+def _boot(raw: dict | None, *, with_file: bool = True) -> dict:
+    """按给定的 config.json 内容起一次配置模块，返回结果字典。
+
+    `with_file=False` 连文件都不写，用来验「真·全新安装」那条路径。
+    子进程崩了不抛异常，而是返回 `{"crash": stderr 尾巴}`——断言会看到缺键。
+    """
     home = Path(tempfile.mkdtemp(prefix="biliEmojiDD-migrate-")) / "biliEmojiDD"
     home.mkdir(parents=True)
-    (home / "config.json").write_text(json.dumps(raw), encoding="utf-8")
+    if with_file:
+        (home / "config.json").write_text(json.dumps(raw), encoding="utf-8")
     result = subprocess.run(
         [sys.executable, "-c", _PROBE],
-        check=False,  # 子进程崩了要能报出来，不能直接抛
+        check=False,
         cwd=str(Path(__file__).resolve().parent.parent),
         env={**os.environ, "APPDATA": str(home.parent), "PYTHONIOENCODING": "utf-8"},
         capture_output=True,
@@ -336,28 +368,47 @@ def _boot_with(raw: dict) -> tuple[str, str, str]:
     )
     for line in result.stdout.splitlines():
         if line.startswith("RESULT"):
-            _, memory, on_disk, schema = line.split()
-            return memory, on_disk, schema
-    return "CRASH", (result.stderr or "")[-200:], "?"
+            return json.loads(line.split(" ", 1)[1])
+    return {"crash": (result.stderr or "")[-200:]}
 
 
-ADDRESS = {"proxy": "http://127.0.0.1:7890"}
+# 真·全新安装：家目录里连 config.json 都没有（这条路径以前从没被测过，
+# 而「默认关」恰恰依赖它）
+fresh = _boot(None, with_file=False)
+check(fresh.get("mem") is False, f"完全没有 config.json → 代理关（{fresh}）")
+check(fresh.get("disk") is False, "全新安装落盘的也是 false")
+check(fresh.get("hasFile") is True, "首次启动会把全量配置写进文件（_ensure_persisted）")
 
-memory, on_disk, schema = _boot_with({"Download": dict(ADDRESS)})
-check(memory == "True", "老配置（有地址、无 proxyEnabled 键）迁移置开")
-check(on_disk == "True", "迁移结果确实落了盘，不只是改了内存")
-check(schema == "1", "迁移完成后 schema 标记就位")
-
-memory, on_disk, _ = _boot_with(
-    {"App": {"schema": 1}, "Download": {**ADDRESS, "proxyEnabled": False}}
+# 老配置（有地址、没有 proxyEnabled 键）：**不再**被自动置开——这是本次修的根因
+old = _boot({"Download": {"proxy": _OLD_ADDRESS}})
+check(
+    old.get("mem") is False,
+    f"老配置里有代理地址也不再自动置开（迁移已删，得到 {old.get('mem')!r}）",
 )
-check(memory == "False", "用户关掉的开关，重启后仍是关的")
+check(old.get("disk") is False, "落盘同样是关")
+check(old.get("proxy") == _OLD_ADDRESS, "地址本身保留（要用时拨一下开关就行）")
+check(old.get("schema") == 1, "schema 熄火标记仍会就位（以后加迁移还得靠它）")
 
-# 回归：schema 已就位但键缺失（文件被改坏 / 清过）。旧写法在这里会翻成 True——
-# 因为它靠「写完盘键就存在」熄火，而 qconfig.set 值没变时压根不落盘。
-memory, on_disk, _ = _boot_with({"App": {"schema": 1}, "Download": dict(ADDRESS)})
-check(memory == "False", "schema 已就位时不再迁移（键缺失也不翻回开）")
-check(on_disk == "False", "缺失的键被补写进文件，下次不会再当成老配置")
+# 用户关掉的开关，重启后仍是关的
+kept = _boot(
+    {"App": {"schema": 1}, "Download": {"proxy": _OLD_ADDRESS, "proxyEnabled": False}}
+)
+check(kept.get("mem") is False, "用户关掉的开关，重启后仍是关的")
+
+# 非法值不再被兜成 True：上游 BoolValidator = OptionsValidator([True, False])，
+# 它的 correct() 回落 options[0]，也就是**永远 True**
+for bad in ("false", None, "True", 0):
+    got = _boot({"Download": {"proxy": _OLD_ADDRESS, "proxyEnabled": bad}})
+    check(
+        got.get("mem") is False,
+        f"proxyEnabled 写成 {bad!r} → 读成关（得到 {got.get('mem')!r}）",
+    )
+    check(got.get("disk") is False, f"非法值在固化前就被纠正成 false（{bad!r}）")
+
+# 默认 True 的两项：非法值回落它们**自己的默认值**，行为不变
+defaults = _boot({"Update": {"autoCheck": "false"}, "Download": {"gif": "no"}})
+check(defaults.get("auto") is True, "autoCheck 写成 'false' 仍回落它的默认值 True（行为不变）")
+check(defaults.get("gif") is True, "gif 写成 'no' 回落它的默认值 True（行为不变）")
 
 print()
 if FAILS:

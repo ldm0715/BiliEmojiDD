@@ -68,47 +68,60 @@
 
 ### 2. 代理开关 + 单地址框
 
-配置项 `proxy_enabled`（`ConfigItem("Download", "proxyEnabled", False, BoolValidator())`），
-**默认关**。老配置迁移：`config.py::_migrate()` 在 `qconfig.load` 之后读一次 JSON，
-若 `Download` 段里**没有** `proxyEnabled` 键而 `proxy` 非空，则置 True——
-以前填过代理的人升级后不会突然断网。
+配置项 `proxy_enabled`（`ConfigItem("Download", "proxyEnabled", False, _StrictBoolValidator(False))`），
+**一律默认关**，没有任何「老配置里有地址就自动置开」的迁移（为什么删掉见下）。
 
-#### 迁移必须靠显式 schema 标记熄火（真实报障）
+#### 代理开关为什么不再自动置开（真实报障）
 
-用户反馈「好几次明明关了代理，重开又是开的」。排查下来，写盘路径本身是通的
-（开关 `checkedChanged` → `qconfig.set` → 内部直接 `save()`，没有延迟定时器），
-问题出在迁移的**熄火条件**上。初版是：
+用户反馈「装新版本后，代理开关默认是打开的」。两次排查的结论：
 
-```python
-if "proxyEnabled" not in download and cfg.proxy.value:
-    qconfig.set(cfg.proxy_enabled, True)     # ← 指望「写完盘键就存在了」来自我熄火
-```
+- **真·全新安装（家目录没有 `config.json`）一直是关的** —— 把文件读取打桩成
+  `FileNotFoundError` 之后构造设置页实测：开关 `isChecked()=False`、地址框与「测试」disabled、
+  副标题「已关闭：所有请求直连」。界面侧也没有取反、没有读错配置项。
+- 变开的唯一来源是那段**迁移**：老配置有 `Download.proxy` + 没有 `proxyEnabled` 键
+  + 没有 `App.schema` → 首次启动置开并落盘。它的前提是「文件里有地址 ⇒ 用户正在用代理」，
+  这个前提只在 0.1.0 成立（那一版没有开关，有地址就通过环境变量走代理）。
+  之后就只剩「用户以前填过、后来关掉了」——而**关开关不清空地址**，残留地址会长期
+  留在文件里；再加 `packaging/installer.nsi` 卸载**默认保留** `%APPDATA%\biliEmojiDD`，
+  用户口中的「全新安装」其实带着老配置。
+- 手动保存那套让情况更糟：老版本要按「保存下载设置」才写盘，用户在框里清空了地址却
+  没点保存，**文件里那个旧值一直留着而界面看着是干净的** —— 等到装新版本，迁移读到的
+  正是这个残留地址。
 
-但 `qconfig.set` 在**值没变化时直接 return、根本不落盘**（上游 `config.py:299`）。
-于是只要出现一次「内存里已经是 True 而文件里仍没有 `proxyEnabled` 键」，
-这段迁移就**永远处于武装状态**，那个键永远补不上；此后任何一次配置回落到默认值
-——`qconfig.load` 被 `@exceptionHandler` 静默吞掉的解析失败、文件被外部改坏 / 清空、
-换安装目录——都会在下次启动被它把用户明确关掉的开关重新翻成「开」。
+现在**迁移已删除**（`config.py::_migrate()` 里只剩 `schema_version` 那套熄火机制），
+设置页那一组也没有「保存」按钮了：开关 / 地址框 / 下载目录 / 线程数全部改完即落库，
+界面和文件不会再有机会不一致。
 
-现在两处加固：
+代价与恢复：真在代理环境里的 0.1.x 老用户升级后变直连、可能连不上 B 站 ——
+但**地址还在地址框里**（关开关不清空地址），拨一下开关就恢复，报错文案里也有
+「当前未使用代理（代理开关已关闭）」的提示（`app/common/exception.py::_proxy_suffix`）。
 
-1. **`schema_version`（`ConfigItem("App", "schema", 0)`）**：迁移只在
-   `schema < CONFIG_SCHEMA` 时跑，跑完置位。迁移本身**只改内存**，不再自己调
-   `qconfig.set`——熄火与落盘解耦。
-2. **`_ensure_persisted()`**：`qconfig.load` 之后比一次「文件原文 vs `qconfig.toDict()`」，
-   不一致就 `qconfig.save()` 补全。`toDict()` 本来就 dump 全部字段，只是从来没有人在启动时
-   触发它——新加的配置项在用户主动改动它之前，文件里一直缺席，迁移判据也就一直读到
-   「键不存在」。首次运行 / 新增字段 / 文件被改坏之后各写一次，之后自然收敛。
+> 顺带一条上游坑：**别用 `BoolValidator`**。它是 `OptionsValidator([True, False])`，而
+> `OptionsValidator.correct()` 把非法值兜成 `options[0]` —— **恒为 `True`**，与这一项自己的
+> 默认值无关。配置文件里出现 `"proxyEnabled": "false"` / `null` 这类非布尔值时，
+> 开关会被读成「开」并被 `_ensure_persisted()` 固化成 `true`。本项目改用
+> `config.py::_StrictBoolValidator(默认值)`：非布尔值回落**这一项自己的默认值**。
 
-回归断言在 `scripts/check_proxy_hint.py` 第 7 节（开子进程按三种初始 config.json 各起一次
-配置模块）：老配置置开且落盘、用户关掉的开关重启仍是关的、
-**schema 已就位但键缺失时不再迁移**（旧写法在这一条会翻成 True）。
+#### 迁移必须靠显式 schema 标记熄火（同一类坑的历史记录）
+
+`schema_version`（`ConfigItem("App", "schema", 0)`）+ `CONFIG_SCHEMA` 是迁移的熄火标记，
+`_migrate()` 只在 `schema < CONFIG_SCHEMA` 时跑且**只改内存**，落盘统一交给
+`_ensure_persisted()`。**不能靠「写完盘那个键就存在了」自我熄火**：
+`qconfig.set` 在值没变化时直接 return、根本不落盘（上游 `config.py:299`），
+旧写法因此会永久武装，把用户明确关掉的开关反复翻回「开」（真实报障）。
+`_ensure_persisted()` 比一次「文件原文 vs `qconfig.toDict()`」，不一致就补写
+（首次运行 / 新增字段 / 文件被改坏之后各写一次，之后自然收敛）。
+
+回归断言在 `scripts/check_proxy_hint.py` 第 7 节（开子进程按不同初始 `config.json` 各起一次
+配置模块）：完全没有配置文件 → 关；老配置里有地址 → **仍然是关**；用户关掉的开关重启仍是关；
+`proxyEnabled` 写成 `"false"` / `null` / `0` 都读成关；默认 True 的项（`autoCheck` / `gif`）
+非法值仍回落它们各自的默认值。
 
 设置页代理行三个控件：`SwitchButton` + `LineEdit` + 「测试」。
 **开关关着时地址框与测试按钮都 disable**（`_sync_proxy_enabled`）——「没开代理」这件事
 在界面上就是确定的，不用去猜「留空算不算不用」。
 
-`_current_proxy()` 是唯一的取值 / 校验入口（保存与测试共用）：
+`_current_proxy()` 是唯一的取值 / 校验入口（「测试」用；以前「保存」也共用，那个按钮已删）：
 
 | 情况 | 返回 |
 |---|---|
@@ -117,15 +130,20 @@ if "proxyEnabled" not in download and cfg.proxy.value:
 | 开着、地址含空格 | `None` + 提示 |
 | 其余 | `normalize_proxy(text)`（无协议前缀补 `http://`） |
 
-**代理即时生效，不进「保存下载设置」那套。** 开关一拨就 `qconfig.set`，地址框
-`editingFinished`（回车 / 焦点移开）就落库。这条是踩出来的：
+**代理即时生效：下载组根本没有「保存」按钮**（2026-09 删掉了那张 `saveDownloadCard`）。
+开关一拨就 `qconfig.set`，地址框 `editingFinished`（回车 / 焦点移开）就落库，
+下载目录与线程数也是同一套。这条是踩出来的：
 
 > 在框里把代理换成新 IP、按了「测试」，然后去用应用——其它请求全是
 > `ProxyError`，报错里的「当前代理」还是**旧 IP**。看起来像「代理没接进请求」，
 > 实际上代理接得好好的，只是那一栏改完没点保存，`cfg.proxy` 还是旧值。
 
+手动保存那套还有更阴的一面：**界面和配置文件可以不一致** —— 用户在框里清空了地址
+却没点保存，文件里那个旧值会一直留着（这就是下面「开关被自动打开」的源头）。删掉按钮、
+全部改成即时生效后，这个不一致窗口就没了。
+
 自动保存是静默的：地址含空格就不写也不弹提示（切个焦点弹一次太吵），报错留给显式的
-「保存」与「测试」。空地址照写——`current_proxies()` 本来就把「开着但地址为空」当直连，
+「测试」。空地址照写——`current_proxies()` 本来就把「开着但地址为空」当直连，
 写进去才能让界面与实际行为一致。
 
 **卡片副标题显示当前生效的代理**（读 `cfg`，不是读输入框，密码打码）：
@@ -137,7 +155,7 @@ if "proxyEnabled" not in download and cfg.proxy.value:
 | 开着、地址为空 | 已开启但地址为空，仍是直连 |
 
 输入框里是「正在编辑的值」，副标题是「其它请求真正在用的值」——把后者摆出来，
-省得对着报错猜。「保存下载设置」现在只管下载目录与线程数。
+省得对着报错猜。
 **关开关不清空地址**，下次打开还在。
 
 ### 3. `proxy.py` 砍成纯字符串工具
@@ -245,8 +263,10 @@ CONNECT，报 `Tunnel connection failed: 4xx`。ping 只验证主机在线，既
 
 ## 相关
 
-- 回归断言：`scripts/check_proxy_hint.py`（不联网，八节 60 条）。第 3 节检查每个工厂产出的
-  session `trust_env is False`；第 5b 节验证「改完不点保存也生效」与副标题三态；
-  第 5c 节打桩 `notify_error` 确认失败提示报的是被测地址、写明接口、且 `duration` 为负。
-  加载环的断言在 `scripts/check_setting_page.py` 第 1b 节。
+- 回归断言：`scripts/check_proxy_hint.py`（不联网，九节 81 条）。第 3 节检查每个工厂产出的
+  session `trust_env is False`；第 5b 节验证下载组即时生效（没有保存按钮）与副标题三态、
+  以及「清空地址框会真的把地址从配置里清掉」；第 5c 节打桩 `notify_error` 确认失败提示报的是
+  被测地址、写明接口、且 `duration` 为负；**第 7 节按不同的初始 `config.json` 各起一次配置
+  模块**，验代理一律默认关、布尔项的非法值不会回落成「开」。
+  下载组即时生效的断言在 `scripts/check_setting_page.py` 第 3b 节，加载环在同文件第 1b 节。
 - `app/common/proxy.py` / `app/common/net.py` 的模块注释里记了同样的要点。
