@@ -1,7 +1,7 @@
 """屏幕外验证「检查更新 + 下载加速 + 版本胶囊」（不联网）。
 
 1. 版本号从 `pyproject.toml` 读，`is_newer` 的各种边界；
-2. `pick_asset` 只认安装包 exe；
+2. `pick_asset` 只认安装包 exe；2b `parse_digest` 只认 sha256（别的算法宁可当没有）；
 3. **镜像**：前缀拼接、`download_urls` 三种配置下的候选顺序、校验和不走镜像；
    3b/3c/3d 自定义源的增删改与拖动排序（改完保持位置、删掉不留悬空引用）；
    3e 测速三档文案；
@@ -11,7 +11,9 @@
 6. `UpdateDialog`：markdown 渲染出内容、**yesButton 已从上游 accept() 断开**（否则一点就关窗）；
 7. `changelog.extract` 取得到内容、缺版本会抛；
 8. `make_session` 的 `trust_env is False`（新增的联网入口）；
-9. SHA-256 校验：对得上放行、改一个字节就拒绝；
+9. SHA-256 校验：**优先用 Release JSON 的 asset digest（零额外请求）**、老版本才退回
+   直连取清单（取不到就抛 UpdateError 而不是裸异常）、对得上放行、改一个字节就拒绝；
+   9b 失败文案不被 `cause_hint` 顺异常链盖掉；
 10. 版本号胶囊：三处都是 InfoBadge 且留了白。
 
 用法：QT_QPA_PLATFORM=offscreen uv run python scripts/check_update.py
@@ -30,6 +32,7 @@ sys.path.insert(0, str(ROOT))
 # 必须赶在 import app.* 之前隔离 APPDATA，否则会写脏真实的 config.json
 os.environ["APPDATA"] = tempfile.mkdtemp(prefix="biliEmojiDD-check-")
 
+import requests
 from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QApplication
 
@@ -38,10 +41,11 @@ app = QApplication(sys.argv)
 from qfluentwidgets import ExpandSettingCard, SettingCard, SettingCardGroup, qconfig
 
 from app.common.config import APP_NAME, GH_MIRROR_CHAIN, cfg
+from app.common.exception import cause_hint
 from app.common.net import make_session
 from app.common.version import is_newer, parse_version, project_version
 from app.components import cookie_status, updater
-from app.components.update_dialog import UpdateDialog
+from app.components.update_dialog import UpdateDialog, _failure_detail
 from app.components.updater import (
     LATENCY_GOOD_MS,
     TIER_ERROR,
@@ -49,14 +53,17 @@ from app.components.updater import (
     TIER_GOOD,
     MirrorSpeed,
     ReleaseInfo,
+    UpdateError,
     add_custom_mirror,
     all_mirrors,
     download_urls,
+    expected_checksum,
     is_custom,
     mirror_chain,
     mirrored,
     normalize_mirror,
     orderable_mirrors,
+    parse_digest,
     parse_sums,
     remove_custom_mirror,
     set_mirror_order,
@@ -123,7 +130,13 @@ for remote, local, want, why in cases:
     check(is_newer(remote, local) is want, f"is_newer({remote!r}, {local!r}) = {want} —— {why}")
 
 print("== 2. 资产挑选 ==")
-exe = {"name": "BiliEmojiDD-Setup-0.2.0.exe", "browser_download_url": "https://x/e.exe", "size": 1}
+exe = {
+    "name": "BiliEmojiDD-Setup-0.2.0.exe",
+    "browser_download_url": "https://x/e.exe",
+    "size": 1,
+    # GitHub 会给每个资产算一个摘要，随 Release JSON 一起返回（大写十六进制）
+    "digest": "sha256:" + "A1" * 32,
+}
 zipped = {"name": "BiliEmojiDD-0.2.0-win64.zip", "browser_download_url": "https://x/z.zip", "size": 2}
 sums = {"name": "SHA256SUMS.txt", "browser_download_url": "https://x/s.txt", "size": 3}
 check(updater.pick_asset([zipped, exe, sums]) is exe, "优先挑安装包 exe，跳过 zip 与校验和")
@@ -140,6 +153,24 @@ info = updater._release_info(
 check(info.tag == "v0.2.0" and info.has_installer, "解析出 tag 与安装包地址")
 check(info.published == "2026-08-30", f"发布日期只留 YYYY-MM-DD（{info.published}）")
 check(info.sums_url == sums["browser_download_url"], "认出 SHA256SUMS.txt 资产")
+check(info.asset_digest == "a1" * 32, f"取到官方 digest 并转小写（{info.asset_digest[:12]}…）")
+old = updater._release_info({"tag_name": "v0.0.9", "assets": [zipped, sums]})
+check(old.asset_digest == "" and old.sums_url, "老 Release 没有 digest 字段时留空，退回清单文件")
+
+print("== 2b. digest 解析：只认 sha256 ==")
+hex64 = "ab" * 32
+for raw, want, why in [
+    (f"sha256:{hex64}", hex64, "标准形态"),
+    (f"SHA256:{hex64.upper()}", hex64, "大小写都认（GitHub 回的是大写）"),
+    ("sha512:" + "ab" * 64, "", "**别的算法拒收**——与 _stream_to 算的 sha256 对不上，放过去会变成永远校验失败"),
+    ("sha256:", "", "只有算法头没有值"),
+    ("sha256:xyz", "", "值里混了非十六进制字符"),
+    (hex64, "", "没有算法头——不知道是什么算法，不收"),
+    ("", "", "空串"),
+    (None, "", "字段是 null（GitHub 对没算过的老资产会给 null）"),
+]:
+    got = parse_digest(raw)
+    check(got == want, f"parse_digest({str(raw)[:24]!r}…) = {want!r} —— {why}")
 
 print("== 3. 下载加速镜像 ==")
 url = "https://github.com/ldm0715/BiliEmojiDD/releases/download/v0.2.0/setup.exe"
@@ -465,6 +496,70 @@ check(
 check(parse_sums(sums_text, "不在里面.exe") == "", "文件名不在清单里返回空串（视为未校验）")
 tampered = hashlib.sha256(payload + b"!").hexdigest()
 check(tampered != digest, "改一个字节摘要就变——下载完的比对据此拒绝运行")
+
+
+class _NoNet:
+    """一被调用就炸的假 session：用来证明「有官方 digest 时压根没发请求」。"""
+
+    def get(self, *args, **kwargs):
+        raise AssertionError("这一步不该发任何请求")
+
+
+class _DeadNet:
+    """取清单文件时连不上——模拟 github.com 直连超时（加速源用户最常见的情形）。"""
+
+    def get(self, *args, **kwargs):
+        raise requests.ConnectionError("github.com 连不上")
+
+
+SUMS_URL = "https://github.com/ldm0715/BiliEmojiDD/releases/download/v0.2.0/SHA256SUMS.txt"
+with_digest = ReleaseInfo(
+    tag="v0.2.0",
+    asset_name="BiliEmojiDD-Setup-0.2.0.exe",
+    asset_digest=digest,
+    sums_url=SUMS_URL,
+)
+check(
+    expected_checksum(with_digest, _NoNet()) == digest,
+    "**有官方 digest 就一个请求都不发**——取清单要直连 github.com，而它排在镜像候选"
+    "循环之前，一超时整个下载就没了，镜像连出场机会都没有",
+)
+check(
+    expected_checksum(ReleaseInfo(asset_digest="", sums_url=""), _NoNet()) == "",
+    "两样都没有时返回空串（视为不校验），同样不发请求",
+)
+legacy = ReleaseInfo(
+    tag="v0.1.0", asset_name="BiliEmojiDD-Setup-0.2.0.exe", sums_url=SUMS_URL
+)
+try:
+    expected_checksum(legacy, _DeadNet())
+except UpdateError as exc:
+    check(
+        "SHA256SUMS" in str(exc) and "校验不了就不会安装" in str(exc),
+        f"老 Release 又直连不上时抛 UpdateError 且说明「不下」而不是裸抛 requests 异常（{exc}）",
+    )
+except Exception as exc:  # noqa: BLE001
+    check(False, f"抛的是 {type(exc).__name__}，应当是 UpdateError")
+else:
+    check(False, "清单取不到竟然没抛异常——那会带着空摘要继续下载")
+
+print("== 9b. 失败文案不被 cause_hint 盖掉 ==")
+# updater 的异常消息带 from exc 的链，cause_hint 会顺链翻到底层的 ConnectTimeout
+chained = UpdateError("这个版本没有官方校验和摘要，校验不了就不会安装")
+chained.__cause__ = requests.ConnectTimeout("github.com 超时")
+check(
+    _failure_detail(chained).startswith("这个版本没有官方校验和摘要"),
+    "updater 自己的异常：原样展示它的消息",
+)
+check(
+    cause_hint(chained).startswith("连接超时"),
+    "（对照）cause_hint 顺链翻出来的是「连接超时，请检查网络 / 代理」——正是要避免盖上去的那句",
+)
+plain = requests.ConnectTimeout("boom")
+check(
+    _failure_detail(plain).startswith("连接超时"),
+    "非 updater 的异常照旧走 cause_hint（biliemoji 那类真因埋在 __cause__ 里的靠它）",
+)
 
 print("== 10. 版本号胶囊 ==")
 from qfluentwidgets import InfoBadge

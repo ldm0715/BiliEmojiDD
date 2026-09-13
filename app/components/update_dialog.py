@@ -36,10 +36,29 @@ from app.common.exception import cause_hint
 from app.common.notify import NEVER_DISMISS, notify_error
 from app.common.theme import SECONDARY_TEXT
 from app.components.task import run_task
-from app.components.updater import ChecksumMismatch, ReleaseInfo, download_asset
+from app.components.updater import (
+    ChecksumMismatch,
+    ReleaseInfo,
+    UpdateError,
+    download_asset,
+)
 
 _DIALOG_W = 560
 _NOTES_H = 260
+
+
+def _failure_detail(exc: Exception) -> str:
+    """失败详情那一行：**`updater` 自己的异常直接用它的消息**，其余才走 `cause_hint`。
+
+    `cause_hint` 是给 biliemoji 那类「外层消息无用、真因埋在 `__cause__` 里」的异常
+    准备的（见 `app/common/exception.py` 模块注释）。`updater` 抛的每条消息却已经是
+    写给用户看的，而它多半带 `from exc` 的异常链——让 `cause_hint` 顺链翻到底层的
+    `ConnectTimeout`，就会用「连接超时。请检查网络；若走了代理，确认代理可用。」
+    盖掉真正该说的那句，而这里的失败多半出在加速源上，指向完全错了。
+    """
+    if isinstance(exc, UpdateError):
+        return str(exc) or type(exc).__name__
+    return cause_hint(exc) or str(exc) or type(exc).__name__
 
 
 class UpdateDialog(MessageBoxBase):
@@ -154,9 +173,11 @@ class UpdateDialog(MessageBoxBase):
             )
             return
         self._set_status("下载失败")
-        lines = [cause_hint(exc) or str(exc) or type(exc).__name__]
+        lines = [_failure_detail(exc)]
         if not cfg.gh_mirror.value:
             lines.append("直连 GitHub 慢或不通时，可在「设置 → 关于 → 下载加速」选一个镜像后重试。")
+        else:
+            lines.append("可在「设置 → 关于 → 下载加速」测速后调整加速源与顺序，再试一次。")
         notify_error(
             "下载失败",
             "\n".join(lines),

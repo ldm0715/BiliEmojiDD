@@ -84,9 +84,12 @@ return Path(__file__).resolve().parents[2]          # 源码：项目根
                                              ↓ 点「下载并安装」
                         run_task(download_asset, needs_progress=True)
                                              ↓
+                        期望摘要：Release JSON 的 asset digest 优先（api.github.com，
+                        查版本那次响应就带着）；老 Release 才退回直连取 SHA256SUMS.txt
+                                             ↓
                         候选 URL（可能带镜像）逐个试 → 流式写 .part → SHA-256
                                              ↓
-                        与 SHA256SUMS.txt（**直连取**）比对
+                        与期望摘要比对
                             ├── 不符 → 删文件 + 报错，绝不运行
                             └── 相符 → os.replace → os.startfile → 关闭应用
 ```
@@ -103,6 +106,12 @@ return Path(__file__).resolve().parents[2]          # 源码：项目根
 - **关应用走 `window.close()` 而不是 `QApplication.quit()`**：后者不触发 `closeEvent`，
   `video_cache.cleanup()` 的临时目录就漏在磁盘上了。
 - **安装包放 `%TEMP%/biliEmojiDD-update/`，不挂 `video_cache.cleanup()`**：它要活过应用退出。
+- **失败详情优先用 `updater` 自己的消息**（`update_dialog._failure_detail`）：那些消息已经
+  写明该干什么，而它们多半带着 `from exc` 的异常链——让 `cause_hint` 顺着链翻到底层的
+  `ConnectTimeout`，就会拿「请检查网络 / 代理」盖掉真正该说的那句。`cause_hint` 是给
+  biliemoji 那类「外层消息无用、真因埋在 `__cause__` 里」的异常准备的，别让它越权。
+- **失败提示里的建议要分情况**：没配加速源才说「选一个镜像」；已经配了就说「测速后调整
+  源与顺序」——对着正在用加速源的人说「去选个镜像」等于没看他的配置。
 
 ---
 
@@ -199,12 +208,37 @@ widget 弄丢。行高固定，目标下标就是一次除法，反而更简单�
 
 - `packaging/build.py` 对安装包与便携 zip 算 SHA-256，写成 `sha256sum` 格式的
   `SHA256SUMS.txt`，随 Release 一起上传；
-- `updater._expected_sum()` **固定直连**从 GitHub 取这个文件——**不走镜像**。
-  拿被校验方给的校验和去校验它自己等于没校验；
+- `updater.expected_checksum()` 按下面的顺序取期望摘要，**两条路都是 GitHub 官方给的、
+  都不经镜像**；
 - 边下边累加摘要，对不上就删掉 `.part` 并抛 `ChecksumMismatch`，弹窗报「安装包校验失败」
   且**不运行**该文件。
 
-老版本 Release 没有 `SHA256SUMS.txt` 时跳过校验（`sums_url` 为空），这是向后兼容的退路。
+### 期望摘要从哪来：digest 优先，清单文件是退路
+
+| 顺序 | 来源 | 走哪个域 | 代价 |
+|---|---|---|---|
+| 1 | Release JSON 里 asset 的 `digest` 字段（`parse_digest`） | `api.github.com` | **零额外请求**——就是查版本那次的响应 |
+| 2 | `SHA256SUMS.txt`（`_expected_sum`） | `github.com` | 多一次请求，且得直连得通 |
+
+**为什么 digest 必须在前面**：`github.com` 与 `api.github.com` 是**两个域**，前者在加速源
+用户的网络里常常不通，而「检查更新」能用只证明后者通。这一节早先的版本是「校验和永远直连
+取」，取的是 `github.com` 上的 `SHA256SUMS.txt`，而它跑在 `download_urls` 那个「逐个候选
+地址重试」的循环**之前**、外层还没有 try——于是用户明明选了加速源，请求在第一步就
+`ConnectTimeout`，安装包下载根本没开始，镜像连出场机会都没有；报出来还是一句
+「连接超时。请检查网络；若走了代理，确认代理可用。」，指向完全错了（用户看到的现象是
+「用了加速源还是下载失败」）。
+
+`digest` 这条路不碰下载域、也不额外发请求。`parse_digest` **只认 `sha256:` 前缀**
+（GitHub 回的是大写十六进制，统一转小写）：别的算法与 `_stream_to` 累加的摘要对不上，
+放过去会变成「永远校验失败」而不是「退回老路」，所以认不出（字段缺失 / `null` / 只有
+算法头 / 夹了非十六进制字符）一律当没有。
+
+第 2 条只服务于 `digest` 字段出现之前的老 Release。它失败时抛 `UpdateError`
+（**不是**裸的 `requests` 异常）并明确说**不安装**——这个包下完是要直接运行的，拿不到
+官方摘要就不该放行。这是刻意的取舍：宁可让那批老版本的用户更新不了，也不能把完整性
+保证降级成「用镜像给的校验和」。
+
+两种来源都取不到（老 Release 且没发 `SHA256SUMS.txt`）时才跳过校验，这是向后兼容的退路。
 
 ---
 
@@ -375,10 +409,12 @@ _adjustViewSize()` 撑起来的，收起时拿到的 `maximum()` 因此偏小：
 QT_QPA_PLATFORM=offscreen PYTHONIOENCODING=utf-8 uv run python scripts/check_update.py
 ```
 
-十节断言：版本号来源与比较、资产挑选、镜像展开、**自定义源增删改**、**顺序与 auto 链**、
-**测速分档**、设置页「关于」组、**加速卡展开区（按钮显隐 / 行内编辑 / 拖动落库）**、
-检查结果分支、更新弹窗（含「点了不关窗」与失败恢复）、`CHANGES.md` 抽取、
-`make_session` 的 `trust_env`、SHA-256 校验、版本胶囊。
+十节断言：版本号来源与比较、资产挑选、**`digest` 解析（只认 sha256）**、镜像展开、
+**自定义源增删改**、**顺序与 auto 链**、**测速分档**、设置页「关于」组、
+**加速卡展开区（按钮显隐 / 行内编辑 / 拖动落库）**、检查结果分支、更新弹窗（含「点了不关窗」
+与失败恢复）、`CHANGES.md` 抽取、`make_session` 的 `trust_env`、
+**SHA-256 校验（digest 优先 = 零额外请求 / 老版本退路抛 `UpdateError` / 失败文案不被
+`cause_hint` 盖掉）**、版本胶囊。
 **全程不联网**（脚本开头 `updater.set_enabled(False)`）。
 
 > **构造 `MainWindow` 的屏幕外脚本必须 `updater.set_enabled(False)`**：启动 3 秒后的自动
@@ -390,6 +426,10 @@ QT_QPA_PLATFORM=offscreen PYTHONIOENCODING=utf-8 uv run python scripts/check_upd
 
 - 真实点一次「检查更新」；点「测速」看四个源的实测延迟与分档是否合理；把「下载加速」
   分别切到直连与各镜像各下一次，确认都能拿到文件且校验通过；
+- **「加速源 + `github.com` 直连不通」这个组合必须人工验**（就是本次修掉的那个 bug，
+  断言脚本只能证明「有 digest 时不发请求」，证明不了真实链路）：断掉对 `github.com`
+  的直连（防火墙 / hosts / 直接拔代理）但保留镜像可达，点「下载并安装」，应当能下完并
+  校验通过，全程不该出现「连接超时」；
 - 加一个自定义源 → 测速 → 拖到最前 → 改地址 → 删除，确认每一步都即时生效；
 - 编译产物：窗口起得来、**内置字体生效**、**收藏集视频能播**、主页展示图可见、
   表情包下载正常（certifi 证书随包）；

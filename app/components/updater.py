@@ -8,8 +8,10 @@
    （`https://gh-proxy.com/` + 原始 URL），改的是 URL 本身；「设置 → 下载 → 代理」改的是
    requests 的 `proxies=`。两者互不影响，可以同时用。用户还能自己加源（`cfg.custom_mirrors`），
    所以「有哪些镜像」一律走 `all_mirrors()` / `mirror_chain()`，别直接读 `GH_MIRRORS`。
-2. **校验和永远直连取。** 安装包可以走镜像加速，`SHA256SUMS.txt` 不行——用被校验方
-   提供的校验和去校验它自己，等于没校验。
+2. **校验和永远来自 GitHub 官方，不经镜像。** 首选 Release JSON 里自带的 asset `digest`
+   （`api.github.com`，与查版本同一次请求，零额外开销，也不用碰 `github.com` 这个下载域）；
+   只有 `digest` 为空的老 Release 才退回直连取 `SHA256SUMS.txt`。用被校验方提供的
+   校验和去校验它自己，等于没校验。
 3. **下完就要自动运行**（见 `update_dialog.py`），所以校验不通过必须删文件并报错，
    绝不能只是提示一下就放行。
 """
@@ -85,6 +87,9 @@ class ReleaseInfo:
     asset_name: str = ""
     asset_url: str = ""
     asset_size: int = 0
+    # 安装包的官方 SHA-256（纯十六进制，来自 Release JSON 的 asset `digest` 字段）；
+    # 老 Release 没有这个字段，退回 `sums_url`
+    asset_digest: str = ""
     sums_url: str = ""
 
     @property
@@ -353,6 +358,7 @@ def _release_info(data: dict) -> ReleaseInfo:
         asset_name=str(installer.get("name") or "") if installer else "",
         asset_url=str(installer.get("browser_download_url") or "") if installer else "",
         asset_size=int(installer.get("size") or 0) if installer else 0,
+        asset_digest=parse_digest(installer.get("digest")) if installer else "",
         sums_url=str(sums.get("browser_download_url") or "") if sums else "",
     )
 
@@ -413,16 +419,57 @@ def update_dir() -> Path:
     return path
 
 
+def expected_checksum(info: ReleaseInfo, session: requests.Session) -> str:
+    """本次下载该拿哪个摘要去比对：优先 Release JSON 自带的 `asset_digest`。
+
+    有 `digest` 就**不发任何额外请求**——它是查版本那次 `api.github.com` 响应里已经
+    带回来的。`_expected_sum` 则要直连 `github.com`（下载域），那恰恰是加速源用户
+    常常不通的域，而它偏偏跑在「逐个候选地址重试」的循环之前，一失败整个下载就没了，
+    镜像连出场机会都没有。
+
+    两条路都是 GitHub 官方给的（`api.github.com` 的 JSON / `github.com` 的清单文件），
+    都不经镜像，所以都满足「不拿被校验方的值校验它自己」。
+    """
+    return info.asset_digest or _expected_sum(info, session)
+
+
 def _expected_sum(info: ReleaseInfo, session: requests.Session) -> str:
     """从 `SHA256SUMS.txt` 里取本资产的校验和；仓库没发这个文件时返回空串。
 
-    **固定直连**：校验和不能经镜像——拿被校验方给的校验和校验它自己等于没校验。
+    **老 Release 的退路**：`digest` 是 GitHub 后来才加到 Release JSON 上的，早于它的
+    发布没有。**固定直连**，不经镜像——拿被校验方提供的校验和校验它自己等于没校验。
+
+    这条路的前提是官方直连可用，所以失败时换一句能行动的说明：裸抛 `ConnectTimeout`
+    会被弹窗翻成「请检查网络 / 代理」，而用户明明开着加速源，指向完全错了。
+    直连不通又拿不到官方摘要时**宁可不下**——这个包下完是要直接运行安装程序的。
     """
     if not info.sums_url:
         return ""
-    response = session.get(info.sums_url, timeout=_API_TIMEOUT)
-    response.raise_for_status()
+    try:
+        response = session.get(info.sums_url, timeout=_API_TIMEOUT)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise UpdateError(
+            "这个版本没有官方校验和摘要（老 Release），直连 GitHub 又取不到 "
+            "SHA256SUMS.txt。校验不了就不会安装——请稍后用能直连 GitHub 的网络重试。"
+        ) from exc
     return parse_sums(response.text, info.asset_name)
+
+
+def parse_digest(raw) -> str:
+    """Release JSON 里 asset 的 `digest`（形如 `sha256:<hex>`）→ 纯小写十六进制。
+
+    认不出就返回空串（`ReleaseInfo.asset_digest` 为空 = 退回 `_expected_sum`），
+    所以这里必须严：**只认 `sha256`**，别的算法与 `_stream_to` 累加出来的摘要对不上，
+    放过去会变成「永远校验失败」而不是「退回老路」。字段缺失、`null`、只有算法头、
+    夹了非十六进制字符，一律返回空串。
+    """
+    algo, sep, value = str(raw or "").strip().lower().partition(":")
+    if algo != "sha256" or not sep or not value:
+        return ""
+    if any(ch not in "0123456789abcdef" for ch in value):
+        return ""
+    return value
 
 
 def parse_sums(text: str, name: str) -> str:
@@ -463,7 +510,8 @@ def download_asset(
     `on_progress(已下字节, 总字节, None)` —— 复用 `run_task(needs_progress=True)` 注入的
     桥接器，第三个参数在这里恒为 None（字节级进度，没有 per-file 结果）。
 
-    候选地址来自 `download_urls`（可能带镜像），逐个尝试；校验和固定直连取。
+    候选地址来自 `download_urls`（可能带镜像），逐个尝试；期望摘要走
+    `expected_checksum`（**在候选循环之前**取，所以它自己不碰镜像，见那里的说明）。
     校验不过抛 `ChecksumMismatch` 并删除文件——下一步就要自动运行它，不能放行。
     """
     if not _enabled:
@@ -472,7 +520,7 @@ def download_asset(
         raise UpdateError("这个版本没有可自动安装的文件")
 
     session = make_session()
-    expected = _expected_sum(info, session)
+    expected = expected_checksum(info, session)
     target = update_dir() / info.asset_name
 
     # 上次下过同一个文件就别重下了（校验和对得上才算数）
