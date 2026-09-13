@@ -1,4 +1,4 @@
-"""会话级下载队列：内存存储，混合表情包 / 收藏集，按类型+ID 去重，重启后清空。"""
+"""会话级下载队列：内存存储，混合表情包 / 收藏集 / 直播间表情，按类型+ID 去重，重启后清空。"""
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -6,18 +6,23 @@ from collections.abc import Iterable
 from PySide6.QtCore import QObject, Signal
 
 from app.components.dress_helpers import dlc_ids
+from app.components.live_emoji import is_live_pack
 
 
 def item_kind(item) -> str:
-    """'package'（表情包）或 'collection'（收藏集）。
+    """'package'（表情包）/ 'collection'（收藏集）/ 'live'（直播间表情）。
 
-    EmotePackage 必有 emote 字段；DressCollectionSummary 无该字段。
+    **live 必须最先判**：下面的 `emote` 二分是有 `.emote` 就当表情包、否则一律
+    收藏集，直播间表情一旦漏进来就会被静默当成收藏集（下载走错分支、卡片渲染
+    读错字段），不会报错，所以判别顺序是有意义的。
     """
+    if is_live_pack(item):
+        return "live"
     return "package" if getattr(item, "emote", None) is not None else "collection"
 
 
 def item_key(item) -> tuple[str, object]:
-    """去重键。表情包 ("pkg", id)；收藏集 ("coll", "dlc:<act>:<lottery>")。
+    """去重键。表情包 ("pkg", id)；收藏集 ("coll", ...)；直播间表情 ("live", room_id)。
 
     收藏集**不能只用 item_id**：搜索结果里 `item_id == properties.dlc_act_id`，
     而一个 dlc 活动下有多期 lottery（如「2233的MBTI-能量之源」act=112667 lot=112709
@@ -28,8 +33,14 @@ def item_key(item) -> tuple[str, object]:
 
     非收藏集的装扮（type='ip'，无 dlc id）退回 item_id / id / 名称，各自带前缀
     防跨方案撞车。summary.id 因 biliemoji 解析 bug 恒为 None，只能读 raw。
+
+    三种类型的键前缀互不相同——`download_mixed_batch` 合并三个子批的 `per_item`
+    时靠的就是「键不撞车」。
     """
-    if item_kind(item) == "package":
+    kind = item_kind(item)
+    if kind == "live":
+        return ("live", str(item.room_id))
+    if kind == "package":
         return ("pkg", item.id)
     act_id, lottery_id = dlc_ids(item)
     if act_id and lottery_id:
@@ -47,11 +58,16 @@ def item_key(item) -> tuple[str, object]:
 
 
 def item_cover_url(item) -> str | None:
-    """队列项封面 URL：表情包取包内第一张表情（动图优先），收藏集取 image_cover。
+    """队列项封面 URL：表情包取包内第一张表情（动图优先），收藏集取 image_cover，
+    直播间表情取房间内的第一张。
 
     下载页队列卡与主页队列预览共用，保证两处显示同一张图。
     """
-    if item_kind(item) == "collection":
+    kind = item_kind(item)
+    if kind == "live":
+        emotes = item.emotes or ()
+        return emotes[0].url if emotes else None
+    if kind == "collection":
         return getattr(item, "image_cover", None)
     emote = getattr(item, "emote", None) or ()
     if emote:
@@ -66,8 +82,8 @@ def item_cover_url(item) -> str | None:
 class DownloadQueue(QObject):
     """按 (类型, ID) 去重的内存下载队列。
 
-    存 EmotePackage 或 DressCollectionSummary；下载时会重新拉取全量，
-    因此不依赖对象是否完整。
+    存 EmotePackage / DressCollectionSummary / LiveEmotePack；前两者下载时会重新
+    拉取全量，因此不依赖对象是否完整（LiveEmotePack 自带全部表情，不需要再取）。
     """
 
     changed = Signal()

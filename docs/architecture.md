@@ -41,14 +41,15 @@ app/
 │   ├── page_bar.py     自制数字分页条
 │   ├── updater.py      查 GitHub Release / 加速镜像 / 下载安装包 + SHA-256 校验
 │   ├── update_dialog.py 更新弹窗（markdown 渲染 + 下载并运行安装程序）
-│   ├── download_runner.py 统一下载流程 + 表情包/收藏集/混合批量下载
-│   ├── download_queue.py  会话级下载队列（混合表情包 + 收藏集）
+│   ├── download_runner.py 统一下载流程 + 表情包/收藏集/直播间表情/混合批量下载
+│   ├── download_queue.py  会话级下载队列（混合三类，按 item_key 去重）
 │   ├── dress_helpers.py   收藏集类别判别 + dlc id 读取（绕开 biliemoji typed 字段 bug）
+│   ├── live_emoji.py      直播间专属表情的网络层 + 模型（GetEmoticons / 房间信息 / 主播信息）
 │   ├── cookie_status.py   Cookie 有效性状态灯（五态 + 信任期 + nav 探针）
 │   └── cache.py        全部表情包本地缓存
 └── view/
     ├── home_page.py    主页（启动默认页）
-    ├── emoji_page.py   表情包页（Pivot 双标签）
+    ├── emoji_page.py   表情包页（Pivot 三标签：全部 / 按 ID / 直播间表情）
     ├── dress_page.py   收藏集页（四列搜索 / 多选加入队列 / 详情）
     ├── download_page.py 下载队列页（混合横向卡片 / 批量下载）
     └── setting_page.py 设置页（关于 / 账号 / 下载 / 缓存 / 外观）
@@ -103,11 +104,12 @@ UI 线程（主线程）              后台线程（QThreadPool / Python 线程
 
 **收藏集视频播放**：`video_cache` 独立线程池（2）→ `Downloader` 下到会话临时目录（显式 proxies）→ `signal_bus.videoRawReady`（worker）→ 主线程写缓存 → `videoReady` → `CollectionVideoPlayer` 校验 `_pending_url` 后 `setVideo(QUrl.fromLocalFile(...))`。不流式播远程 URL：`QMediaPlayer` 走系统代理、不读应用内代理设置（详见 `docs/collection_video.md`）。
 
-**混合下载队列**：表情包 / 收藏集页多选「加入下载」→ `download_queue.add_many`（按 `item_kind`/`item_key` 去重）→ 下载页 `QueueList` 统一横向卡片 → 「下载选中」→ `download_mixed_batch` 按类型拆分顺序执行两子批并合并结果。
+**混合下载队列**：表情包 / 收藏集 / 直播间表情页多选或整包「加入下载」→ `download_queue.add_many`（按 `item_kind`/`item_key` 去重）→ 下载页 `QueueList` 统一横向卡片 → 「下载选中」→ `download_mixed_batch` 按类型拆分顺序执行三子批并合并结果。第三类（直播间表情，`item_kind == "live"`）自成一子批，且**唯一不需要在下载时再取详情**——表情清单随队列项一起拿到。详见 `docs/live_emoji.md`。
 
 ## 配置与缓存
 
 - 配置：`AppConfig(QConfig)`，`qconfig.load` 持久化到 `%APPDATA%/biliEmojiDD/config.json`。`theme` 项带 `EnumSerializer(Theme)`（否则 `json.dump` 崩）。Cookie / 目录变更即时生效（每次操作现读 `cfg`）。
+  - 全部配置项：`cookie`、`account_name`/`account_mid`/`account_face`（上次登录的账号，**只用于展示，启动时不联网刷**）、`cookie_checked_at`/`cookie_checked_hash`/`cookie_checked_state`（Cookie 有效性记录）、`download_dir`、`default_gif`、`max_workers`(1–16)、`proxy_enabled`(默认**关**)、`proxy`、`cache_limit_mb`(64–8192)、`theme`(带 `EnumSerializer`)、`font_engine`(default/freetype)、`auto_check_update`(默认**开**)、`gh_mirror`(当前加速源，默认空=直连；**不能带 `OptionsValidator`**，取值集合随用户增删而变)、`custom_mirrors`(成员)、`mirror_order`(顺序)。布尔项一律 `_StrictBoolValidator(该项默认值)`。
   - **新增字段不需要写迁移**：`_ensure_persisted()` 启动时比一次「文件原文 vs 内存快照」，缺键就补写；默认值本身要能表达「没有」（如 `cookieCheckedAt=0` / `cookieCheckedHash=""`）。要改老数据才动 `CONFIG_SCHEMA`（+1）与 `_migrate`，且**迁移判据不能是「文件里有没有这个键」**——`qconfig.set` 值没变时不落盘，靠键存在熄火会永久武装。
 - 缓存：`all_packages` 结果按 cookie 指纹（`cache.cookie_fingerprint`）+ 24h TTL 存 `%APPDATA%/biliEmojiDD/all_packages.json`；用 `EmotePackage.raw`（完整原始 dict）持久化、`from_dict` 无损重建。Cookie 有效性记录（`cookieChecked*` 三项）也在配置里，用同一个指纹口径、**另有自己的信任期**（有效 7 天 / 失效 30 分钟）。
 - 版本号：**唯一来源是 `pyproject.toml` 的 `[project] version`**，`app/common/version.py::project_version()` 用 `tomllib` 在运行时读（`[tool.uv] package=false` 拿不到 `importlib.metadata`）。编译后该文件随 exe 一起分发。读不到时返回 `"unknown"`——一个解析不出来的值，使检查更新安静地不提示而不是误报有新版。

@@ -466,8 +466,8 @@ pump()
 # ---------------------------------------------------------------- 8. 标签顺序
 print("\n[8] 表情包页标签顺序与默认页")
 check(
-    list(emoji.pivot.items) == ["all", "byId"],
-    f"「全部表情包」在「按 ID 查询」之前（得到 {list(emoji.pivot.items)}）",
+    list(emoji.pivot.items) == ["all", "byId", "live"],
+    f"「全部表情包」在「按 ID 查询」「直播间表情」之前（得到 {list(emoji.pivot.items)}）",
 )
 check(emoji.stackedWidget.indexOf(emoji.allTab) == 0, "栈里 allTab 在第 0 位")
 check(emoji.stackedWidget.currentWidget() is emoji.allTab, "默认停在「全部表情包」")

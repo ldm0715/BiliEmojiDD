@@ -1,11 +1,15 @@
-"""表情包页：Pivot 两个标签（全部表情包 / 按 ID 查询）。
+"""表情包页：Pivot 三个标签（全部表情包 / 按 ID 查询 / 直播间表情）。
 
 两级导航：先展示表情包（大类）卡片列表，点击进入包详情查看全部表情并下载。
 「全部表情包」列表使用分页，避免一次性加载太多。
 
+「直播间表情」是第三类资源：B 站直播间的主播专属表情（接口见 `live_emoji`），
+按 room_id 拉取，展平成一个网格预览，整包加入下载队列。
+
 「全部表情包」放**第一个标签且是默认页**：它才是这页的主体，而「按 ID 查询」
 在没输入 ID 时是片空白。Cookie 确认有效后 `MainWindow` 会调
 `ensure_all_packages()` 静默预拉取（不切页），用户进来时列表已经就绪。
+「直播间表情」**不做预拉取**——它必须由用户给出 room_id 才成立。
 """
 from __future__ import annotations
 
@@ -24,10 +28,12 @@ from qfluentwidgets import (
     CheckBox,
     FluentIcon,
     InfoBarPosition,
+    InfoLevel,
     Pivot,
     PrimaryPushButton,
     PushButton,
     SearchLineEdit,
+    SubtitleLabel,
     TransparentPushButton,
 )
 
@@ -39,6 +45,9 @@ from app.common.theme import SECONDARY_TEXT
 from app.components import api_cache, cookie_status
 from app.components.cache import load_all_packages_cache, save_all_packages_cache
 from app.components.download_queue import download_queue
+from app.components.download_runner import downloaded_exists, live_download_dir
+from app.components.image_viewer import show_image_viewer
+from app.components.login_dialog import AccountAvatar
 from app.components.package_detail import PackageDetailView
 from app.components.page_bar import PageBar
 from app.components.page_scaffold import (
@@ -46,12 +55,14 @@ from app.components.page_scaffold import (
     PAGE_MARGIN,
     SECTION_SPACING,
     CommandCard,
+    SectionCard,
     page_title,
+    status_badge,
     title_row,
 )
 from app.components.search_history import SearchHistoryPanel
 from app.components.task import run_task
-from app.components.widgets import PackageGrid
+from app.components.widgets import EmojiGrid, PackageGrid
 
 _PAGE_SIZE = 20  # 全部表情包每页数量
 
@@ -402,6 +413,233 @@ class _AllPackagesTab(QWidget):
         )
 
 
+class _LiveEmoteTab(QWidget):
+    """直播间专属表情：输入 room_id 拉取该房间的主播表情，整包加入下载。
+
+    版式照「按 ID 查询」——命令卡**只放输入框 + 按钮**，结果信息（头像 / 主播名 /
+    房间号 / 数量 / 已下载 / 加入下载）全在下面**独立的详情卡**里。信息类文字不要
+    塞进搜索那一行，那样看着就是输入框的一部分。
+
+    粒度是**整包**（一个房间 = 一个队列项，键 `("live", room_id)`），与「全部
+    表情包」按包多选一致；网格只做预览，点开是大图查看器。
+    """
+
+    _EMPTY_NAME = "尚未获取直播间表情"
+    _EMPTY_HINT = "输入直播间 room_id 后点击「获取直播间表情」"
+    _WIDTH = 260  # room_id 输入框宽度
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._pack = None
+        # 正在拉取。与 _AllPackagesTab 同理：清它必须挂在 on_finished 上，
+        # 只在成功路径清会让失败后再也拉不动
+        self._loading = False
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(PAGE_MARGIN, 0, PAGE_MARGIN, PAGE_BOTTOM)
+        layout.setSpacing(SECTION_SPACING)
+
+        # ---- 命令卡：只有搜索框 + 按钮 ----
+        self.commandCard = CommandCard(self)
+        top_row = self.commandCard.add_row()
+        self.roomEdit = SearchLineEdit(self.commandCard)
+        self.roomEdit.setPlaceholderText("输入直播间 room_id")
+        self.roomEdit.setFixedWidth(self._WIDTH)
+        self.fetchBtn = PrimaryPushButton("获取直播间表情", self.commandCard)
+        top_row.addWidget(self.roomEdit)
+        top_row.addWidget(self.fetchBtn)
+        top_row.addStretch(1)
+
+        # 房间号记录：浮层面板，点输入框才下拉，不占命令卡版面
+        self.historyPanel = SearchHistoryPanel(self.roomEdit, "live_room")
+        layout.addWidget(self.commandCard)
+
+        # ---- 详情卡：头像 + 主播名 / 详情行 + 已下载 + 加入下载 ----
+        self.detailCard = CommandCard(self)
+        detail_row = self.detailCard.add_row()
+        self.avatar = AccountAvatar(self.detailCard)
+        # 先钉死尺寸：AccountAvatar 只在图片到达时才 setFixedSize，在此之前
+        # 它是可见但尺寸未定的，会让这一行的高度在缩略图到位前后来回跳
+        self.avatar.setFixedSize(AccountAvatar.SIZE, AccountAvatar.SIZE)
+        self.avatar.set_url("")
+
+        title_box = QVBoxLayout()
+        title_box.setContentsMargins(0, 0, 0, 0)
+        title_box.setSpacing(2)
+        self.nameLabel = SubtitleLabel(self._EMPTY_NAME, self.detailCard)
+        self.detailLabel = CaptionLabel("", self.detailCard)
+        self.detailLabel.setTextColor(*SECONDARY_TEXT)
+        # 换行：QLabel 不换行时最小宽度就是整串文字宽度，会把整页顶得缩不下去
+        self.nameLabel.setWordWrap(True)
+        self.detailLabel.setWordWrap(True)
+        title_box.addWidget(self.nameLabel)
+        title_box.addWidget(self.detailLabel)
+
+        self.downloadedLabel = status_badge("已下载", InfoLevel.SUCCESS, self.detailCard)
+        self.downloadedLabel.hide()
+        self.addBtn = PrimaryPushButton("加入下载", self.detailCard)
+        self.addBtn.setEnabled(False)
+        detail_row.addWidget(self.avatar, 0, Qt.AlignmentFlag.AlignVCenter)
+        detail_row.addLayout(title_box, 1)
+        detail_row.addWidget(self.downloadedLabel, 0, Qt.AlignmentFlag.AlignVCenter)
+        detail_row.addWidget(self.addBtn, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(self.detailCard)
+
+        # ---- 预览卡：表情网格 ----
+        self.previewCard = SectionCard("表情预览", self)
+        self.grid = EmojiGrid(self.previewCard)
+        self.previewCard.add_widget(self.grid)
+        layout.addWidget(self.previewCard, 1)
+
+        self.fetchBtn.clicked.connect(self._on_fetch)
+        self.roomEdit.returnPressed.connect(self._on_fetch)
+        # searchSignal 带一个 str 载荷，PySide6 会为接受更少参数的槽丢掉它；
+        # 这里照样从输入框现读，避免「点放大镜」与「按回车」两条路取值口径不一
+        self.roomEdit.searchSignal.connect(self._on_fetch)
+        self.roomEdit.clearSignal.connect(self._clear)
+        self.historyPanel.activated.connect(self._on_history_activated)
+        self.grid.imageClicked.connect(self._open_image_viewer)
+        self.addBtn.clicked.connect(self._on_add_to_queue)
+        download_queue.changed.connect(self._on_queue_changed)
+
+        self._clear()
+
+    # ---- 交互 ----
+
+    def _on_history_activated(self, room_id: str) -> None:
+        """点历史胶囊 = 回填房间号并立即拉取。"""
+        self.roomEdit.setText(room_id)
+        self._on_fetch()
+
+    def _on_fetch(self) -> None:
+        room_id = self.roomEdit.text().strip()
+        if not room_id.isdigit():
+            notify_warning(
+                "房间号无效",
+                "直播间 room_id 应是一串数字，如 5236391",
+                parent=self,
+                position=InfoBarPosition.TOP_RIGHT,
+            )
+            return
+        if self._loading:
+            return
+        self._loading = True
+        self.historyPanel.record(room_id)
+        self.fetchBtn.setEnabled(False)
+        # 加载态照 PackageDetailView.show_loading：写详情卡，不是搜索行
+        self._pack = None
+        self.avatar.set_url("")
+        self.grid.set_emotes([])
+        self.downloadedLabel.hide()
+        self.nameLabel.setText(f"正在获取「{room_id}」…")
+        self.detailLabel.setText("")
+        self._sync_queue_btn()
+
+        def task():
+            return api_cache.live_emotes(room_id)
+
+        run_task(
+            task,
+            on_success=self._on_loaded,
+            on_error=self._on_failed,
+            on_finished=self._on_finished,
+        )
+
+    def _open_image_viewer(self, index: int) -> None:
+        items = self.grid.items()
+        if index < 0 or not items:
+            return
+        show_image_viewer(items, index, self.window())
+
+    def _on_add_to_queue(self) -> None:
+        pack = self._pack
+        if pack is None or not pack.emotes:
+            return
+        name = pack.display_name()
+        if download_queue.add(pack):
+            notify_success(
+                "已加入下载队列",
+                f"「{name}」的 {len(pack.emotes)} 个表情已加入，可前往「下载」页查看",
+                parent=self,
+                position=InfoBarPosition.TOP_RIGHT,
+            )
+        else:
+            notify_info(
+                "已在下载队列",
+                f"「{name}」已在队列中",
+                parent=self,
+                position=InfoBarPosition.TOP_RIGHT,
+            )
+
+    # ---- 结果填充 ----
+
+    def _on_loaded(self, pack) -> None:
+        self._pack = pack
+        self.avatar.set_url(pack.anchor_face or "")
+        self.nameLabel.setText(pack.display_name())
+        count = len(pack.emotes)
+        self.detailLabel.setText(
+            f"房间号: {pack.room_id} · {count} 个专属表情"
+            if count
+            else f"房间号: {pack.room_id} · 该直播间没有专属表情"
+        )
+        # 第三位驱动网格的 GIF 角标与悬浮播放，与下载时按 url 后缀取文件的口径无关
+        self.grid.set_emotes([(em.text or "", em.url, em.is_gif) for em in pack.emotes])
+        self._sync_queue_btn()
+        self._refresh_downloaded()
+
+    def _on_failed(self, exc) -> None:
+        self._clear()
+        self.nameLabel.setText("获取失败")
+        self.detailLabel.setText("请检查 room_id 与 Cookie 后重试")
+        if isinstance(exc, AuthRequired):
+            # 信任期内的旧绿灯靠这条纠正；**不直接判红**——也可能只是网络 / 风控
+            cookie_status.invalidate()
+        show_bili_error(exc, self)
+
+    def _on_finished(self, ok: bool) -> None:
+        """成功与两条异常路都会走这里，故 _loading 与按钮只在这里收。"""
+        self._loading = False
+        self.fetchBtn.setEnabled(True)
+
+    def _clear(self) -> None:
+        """回到「还没查过」的状态（点输入框的 × 也走这里）。"""
+        self._pack = None
+        self.avatar.set_url("")
+        self.nameLabel.setText(self._EMPTY_NAME)
+        self.detailLabel.setText(self._EMPTY_HINT)
+        self.grid.set_emotes([])
+        self.downloadedLabel.hide()
+        self._sync_queue_btn()
+
+    # ---- 按钮状态 ----
+
+    def _on_queue_changed(self) -> None:
+        """队列变化时同步按钮，并重判一次「已下载」（下完会自动出队，那一刻正该刷新）。"""
+        self._sync_queue_btn()
+        self._refresh_downloaded()
+
+    def _sync_queue_btn(self) -> None:
+        """「加入下载 / 已加入」状态单一同步源；无结果或已在队列 → 禁用。"""
+        pack = self._pack
+        if pack is None or not pack.emotes:
+            self.addBtn.setText("加入下载")
+            self.addBtn.setEnabled(False)
+        elif download_queue.contains(pack):
+            self.addBtn.setText("已加入")
+            self.addBtn.setEnabled(False)
+        else:
+            self.addBtn.setText("加入下载")
+            self.addBtn.setEnabled(True)
+
+    def _refresh_downloaded(self) -> None:
+        """已下载状态：目标目录存在且非空即显示徽标。"""
+        pack = self._pack
+        self.downloadedLabel.setVisible(
+            pack is not None and downloaded_exists(live_download_dir(pack))
+        )
+
+
 class EmojiPage(QWidget):
     """表情包主页面。"""
 
@@ -411,11 +649,13 @@ class EmojiPage(QWidget):
         self.stackedWidget = QStackedWidget(self)
         self.idTab = _IdQueryTab(self)
         self.allTab = _AllPackagesTab(self)
+        self.liveTab = _LiveEmoteTab(self)
         # 「全部表情包」在前且是默认页：它才是主体，而「按 ID 查询」没输入 ID 时
         # 是片空白。默认项正好是 index 0，Pivot 指示条初始位置天然正确
         # （未显示时程序化定位不可靠，别把默认项设成第二项）
         self.stackedWidget.addWidget(self.allTab)
         self.stackedWidget.addWidget(self.idTab)
+        self.stackedWidget.addWidget(self.liveTab)
         self.pivot.addItem(
             routeKey="all",
             text="全部表情包",
@@ -425,6 +665,11 @@ class EmojiPage(QWidget):
             routeKey="byId",
             text="按 ID 查询",
             onClick=lambda: self.stackedWidget.setCurrentWidget(self.idTab),
+        )
+        self.pivot.addItem(
+            routeKey="live",
+            text="直播间表情",
+            onClick=lambda: self.stackedWidget.setCurrentWidget(self.liveTab),
         )
 
         layout = QVBoxLayout(self)

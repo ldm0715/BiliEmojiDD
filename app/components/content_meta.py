@@ -41,6 +41,11 @@ def _package_meta(pkg) -> ContentMeta:
     return ContentMeta(sum(1 for em in pkg.emote if em.gif_url or em.url), 0)
 
 
+def live_meta(pack) -> ContentMeta:
+    """直播间表情：房间内全部专属表情（列表本身就是全量，无需联网）。"""
+    return ContentMeta(len(pack.emotes), 0)
+
+
 def collection_meta(coll) -> ContentMeta:
     """收藏集：有图片的项数 + 有视频的项数（视频每项只下第一个）。"""
     images = sum(1 for it in coll.item_list if it.card_img_download)
@@ -63,7 +68,12 @@ class _MetaTask(QRunnable):
     def run(self) -> None:
         meta = None
         try:
-            if item_kind(self._item) == "package":
+            kind = item_kind(self._item)
+            if kind == "live":
+                # 直播间表情自带全量列表，cached() 已经同步推导过，走不到这里；
+                # 万一走到（emotes 为空）显示「未知」即可，别掉进收藏集分支。
+                meta = None
+            elif kind == "package":
                 meta = _package_meta(api_cache.emoji_package(self._item.id))
             else:
                 act_id, lottery_id = dlc_ids(self._item)
@@ -103,9 +113,15 @@ class ContentMetaManager(QObject):
         meta = self._cache.get(key)
         if meta is not None:
             return meta
+        kind = item_kind(item)
         # 详情页加入的 EmotePackage 自带完整 emote，零请求直接算
-        if item_kind(item) == "package" and getattr(item, "emote", None):
+        if kind == "package" and getattr(item, "emote", None):
             meta = _package_meta(item)
+            self._cache[key] = meta
+            return meta
+        # 直播间表情的 emotes 就是全量，同样零请求
+        if kind == "live":
+            meta = live_meta(item)
             self._cache[key] = meta
             return meta
         return None

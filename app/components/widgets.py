@@ -1435,7 +1435,12 @@ class QueueCard(_SpinnerMixin, QWidget):
 
     def _refresh_text(self) -> None:
         kind = item_kind(self.item)
-        if kind == "package":
+        if kind == "live":
+            pack = self.item
+            self.nameLabel.setText(pack.display_name())
+            self.badgeLabel.setText("直播间表情")
+            self.metaLabel.setText(f"房间: {pack.room_id}")
+        elif kind == "package":
             pkg = self.item
             self.nameLabel.setText(pkg.text or ("#" + str(pkg.id)))
             self.badgeLabel.setText("GIF 动图包" if pkg.is_gif else "表情包")
@@ -1466,11 +1471,11 @@ class QueueCard(_SpinnerMixin, QWidget):
     # ---- 主题 ----
 
     def _refresh_badge(self) -> None:
-        """徽标颜色：表情包 / 装扮用次要色，收藏集用品牌橙（两主题均可读）。"""
-        if item_kind(self.item) == "package":
-            colors = SECONDARY_TEXT
-        else:
+        """徽标颜色：表情包 / 直播间表情用次要色，收藏集用品牌橙（两主题均可读）。"""
+        if item_kind(self.item) == "collection":
             colors = ORANGE_TEXT if is_collection(self.item) else SECONDARY_TEXT
+        else:
+            colors = SECONDARY_TEXT
         self.badgeLabel.setTextColor(*colors)
 
     def _apply_theme(self) -> None:

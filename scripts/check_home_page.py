@@ -326,8 +326,8 @@ dress_mod.run_task = lambda *a, **kw: tasks.append("dress")
 emoji = EmojiPage()
 emoji.resize(900, 700)
 check(
-    list(emoji.pivot.items) == ["all", "byId"],
-    f"标签顺序为「全部表情包 → 按 ID 查询」（得到 {list(emoji.pivot.items)}）",
+    list(emoji.pivot.items) == ["all", "byId", "live"],
+    f"标签顺序为「全部表情包 → 按 ID 查询 → 直播间表情」（得到 {list(emoji.pivot.items)}）",
 )
 check(
     emoji.stackedWidget.indexOf(emoji.allTab) == 0,

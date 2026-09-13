@@ -200,6 +200,20 @@ def collection_download_dir(summary) -> Path:
     return Path(cfg.download_dir.value) / sanitize_filename(summary.name or "收藏集")
 
 
+def live_folder_name(pack) -> str:
+    """直播间表情的目录名：`<主播名> [<room_id>]`。
+
+    单独抽出来是为了让 `live_download_dir`（徽标判定）与 `download_live_batch`
+    （真正建目录）**用同一个名字**——两处各写一份的话，改了一处徽标就永远判不出。
+    """
+    return f"{_truncate(sanitize_filename(pack.display_name()), 60)} [{pack.room_id}]"
+
+
+def live_download_dir(pack) -> Path:
+    """直播间表情下载目标目录（与 download_live_batch 命名一致）。"""
+    return Path(cfg.download_dir.value) / live_folder_name(pack)
+
+
 def downloaded_exists(folder: Path) -> bool:
     """目标目录已存在且非空 → 视为已下载过。"""
     return folder.is_dir() and any(folder.iterdir())
@@ -376,6 +390,70 @@ def download_collection_batch(
     )
 
 
+def download_live_batch(
+    packs,
+    dest,
+    *,
+    max_workers: int | None = None,
+    on_progress=None,
+) -> BatchReport:
+    """批量下载直播间专属表情：单 Downloader + 单进度条 + 聚合结果。
+
+    - packs：`LiveEmotePack` 列表。与另两类最大的不同是**无需任何额外接口调用**
+      ——表情清单已经随 pack 一起拿到，所以循环里只报进度、不取详情。
+    - max_workers 传入时使用传入值，仅 None 时读 cfg.max_workers.value。
+    - 联网对象全部经 app/common/net.py 建（显式代理 + 不读系统代理）。
+    - 目录 `live_folder_name(pack)`（= `<主播名> [<room_id>]`），文件名取表情名。
+      后缀与格式断言都照 URL 原样（见 `LiveEmote.ext` / `expected_ext`）。
+    - 空 pack（该房间确实没有专属表情）合成 FAILED 结果后继续，不中断整批。
+    """
+    max_workers = cfg.max_workers.value if max_workers is None else max_workers
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+
+    meta_failures: list[DownloadResult] = []
+    tasks: list[DownloadTask] = []
+    owners: dict[Path, tuple] = {}  # 下载目录 -> item_key，用于逐项归属
+    meta_failed: dict[tuple, ItemOutcome] = {}
+    total = len(packs)
+    for i, pack in enumerate(packs, 1):
+        if on_progress is not None:
+            on_progress(i, total, None)  # 准备阶段标记：result=None
+        if not pack.emotes:
+            meta_failed[item_key(pack)] = ItemOutcome(total=1, failed=1)
+            meta_failures.append(
+                DownloadResult(
+                    url=f"直播间 {pack.room_id}",
+                    target=dest / f"_fetch_failed_live_{i}",
+                    status=DownloadStatus.FAILED,
+                    error=ValidationError("该直播间没有可下载的专属表情"),
+                )
+            )
+            continue
+
+        folder = dest / live_folder_name(pack)
+        owners[folder] = item_key(pack)
+        for em in pack.emotes:
+            name = _truncate(sanitize_filename(em.text or em.unique or "emote"), 60)
+            tasks.append(
+                DownloadTask(
+                    url=em.url,
+                    target=folder / f"{name}{em.ext()}",
+                    expected_ext=em.expected_ext(),
+                )
+            )
+
+    downloader = make_downloader(max_workers=max_workers, on_progress=on_progress)
+    result = downloader.download_many(tasks)
+    per_item = _collect_outcomes(result.results, owners)
+    per_item.update(meta_failed)
+    return BatchReport(
+        results=result.results + tuple(meta_failures),
+        elapsed=result.elapsed,
+        per_item=per_item,
+    )
+
+
 def download_mixed_batch(
     items,
     dest,
@@ -385,13 +463,14 @@ def download_mixed_batch(
     max_workers: int | None = None,
     on_progress=None,
 ) -> BatchReport:
-    """混合批量下载（下载队列页）：先表情包、后收藏集，顺序执行两个子批并合并结果。
+    """混合批量下载（下载队列页）：表情包 → 收藏集 → 直播间表情，顺序执行三个子批并合并。
 
-    进度条在两个子批间会重新定程（start_download 的 on_progress 会 setRange）。
-    两个子批的 per_item 直接合并——键是 item_key，天然不冲突。
+    进度条在子批之间会重新定程（start_download 的 on_progress 会 setRange）。
+    三个子批的 per_item 直接合并——键是 item_key，前缀互不相同，天然不冲突。
     """
     packages = [it for it in items if item_kind(it) == "package"]
     collections = [it for it in items if item_kind(it) == "collection"]
+    lives = [it for it in items if item_kind(it) == "live"]
     parts: list[BatchReport] = []
     if packages:
         parts.append(
@@ -409,6 +488,15 @@ def download_mixed_batch(
                 collections,
                 dest,
                 mode=mode,
+                max_workers=max_workers,
+                on_progress=on_progress,
+            )
+        )
+    if lives:
+        parts.append(
+            download_live_batch(
+                lives,
+                dest,
                 max_workers=max_workers,
                 on_progress=on_progress,
             )

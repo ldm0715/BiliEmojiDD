@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # 项目根
 
 from PySide6.QtGui import QColor, QPixmap, QPixmapCache
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
 app = QApplication(sys.argv)
 
@@ -160,6 +160,17 @@ ALL_NAMES = [
     "backBtn",
     "detail",
 ]
+LIVE_NAMES = [
+    "roomEdit",
+    "fetchBtn",
+    "detailCard",
+    "avatar",
+    "nameLabel",
+    "detailLabel",
+    "downloadedLabel",
+    "addBtn",
+    "grid",
+]
 DRESS_NAMES = [
     "kwEdit",
     "onlyCollCheck",
@@ -208,6 +219,7 @@ DETAIL_NAMES = [
 for tag, obj, names in (
     ("EmojiPage.idTab", emoji.idTab, EMOJI_NAMES),
     ("EmojiPage.allTab", emoji.allTab, ALL_NAMES),
+    ("EmojiPage.liveTab", emoji.liveTab, LIVE_NAMES),
     ("DressPage", dress, DRESS_NAMES),
     ("DownloadPage", dl, DL_NAMES),
     ("PackageDetailView", emoji.idTab.detail, DETAIL_NAMES),
@@ -237,6 +249,23 @@ for tag, page, title, card in (
         f"{tag}页标题与命令卡左对齐且为 {PAGE_MARGIN}（实际 {tx} / {cx}）",
     )
 check(isinstance(emoji.idTab.searchCard, CommandCard), "按 ID 查询页也是 CommandCard")
+check(
+    isinstance(emoji.liveTab.commandCard, CommandCard)
+    and isinstance(emoji.liveTab.detailCard, CommandCard)
+    and isinstance(emoji.liveTab.previewCard, SectionCard)
+    and emoji.liveTab.previewCard.headerLabel.text() == "表情预览",
+    "直播间表情页同样是命令卡 + 详情卡 +「表情预览」SectionCard",
+)
+# 命令卡里只能有输入框 + 按钮：信息塞进搜索行看着就是输入框的一部分
+_live_children = [
+    w
+    for w in emoji.liveTab.commandCard.findChildren(QWidget)
+    if w.isVisibleTo(emoji.liveTab) and w.parent() is emoji.liveTab.commandCard
+]
+check(
+    _live_children == [emoji.liveTab.roomEdit, emoji.liveTab.fetchBtn],
+    f"直播间表情的命令卡只放输入框 + 按钮（实际 {[type(w).__name__ for w in _live_children]}）",
+)
 check(
     isinstance(emoji.idTab.detail.previewCard, SectionCard)
     and isinstance(dress.previewCard, SectionCard),

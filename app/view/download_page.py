@@ -81,7 +81,8 @@ class DownloadPage(QWidget):
         body.addWidget(self.grid, 1)
 
         self.emptyLabel = BodyLabel(
-            "队列为空\n可在「表情包」「收藏集」页多选后加入，或从包详情页点击「加入下载」", self
+            "队列为空\n可在「表情包」「收藏集」页多选后加入，或从包详情页 /「直播间表情」页点击「加入下载」",
+            self,
         )
         self.emptyLabel.setTextColor(*SECONDARY_TEXT)
         self.emptyLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -129,7 +130,7 @@ class DownloadPage(QWidget):
         if not items:
             notify_warning(
                 "未选择",
-                "请先选择要删除的表情包 / 收藏集",
+                "请先选择要删除的表情包 / 收藏集 / 直播间表情",
                 parent=self,
                 position=InfoBarPosition.TOP_RIGHT,
             )
@@ -148,7 +149,7 @@ class DownloadPage(QWidget):
         if not items:
             notify_warning(
                 "未选择",
-                "请先选择要下载的表情包 / 收藏集",
+                "请先选择要下载的表情包 / 收藏集 / 直播间表情",
                 parent=self,
                 position=InfoBarPosition.TOP_RIGHT,
             )
