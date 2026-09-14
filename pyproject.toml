@@ -2,7 +2,7 @@
 name = "bili-emoji-dd"
 # 版本号唯一来源：app/common/version.py::project_version 在运行时读这里，
 # packaging/build.py 也读这里。改版本只改这一行。
-version = "0.1.3"
+version = "0.1.4"
 description = "B站表情包与收藏集下载器（PySide6 + QFluentWidgets + biliemoji）"
 readme = "README.md"
 requires-python = ">=3.11"
