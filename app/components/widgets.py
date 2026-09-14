@@ -4,7 +4,7 @@ from __future__ import annotations
 from functools import partial
 
 from PySide6.QtCore import QEvent, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QAction, QCursor, QIcon
+from PySide6.QtGui import QAction, QCursor, QIcon, QPixmap, QPixmapCache
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -32,9 +32,12 @@ from qfluentwidgets import (
 )
 from qfluentwidgets.common.style_sheet import ThemeColor
 
+from app.common.notify import notify_success, notify_warning
 from app.common.signal_bus import signal_bus
 from app.common.theme import ORANGE_TEXT, SECONDARY_TEXT, bind_theme
+from app.components.clipboard import copy_image, copy_image_bytes
 from app.components.content_meta import content_meta
+from app.components.disk_cache import image_cache
 from app.components.download_queue import item_cover_url, item_key, item_kind
 from app.components.download_runner import (
     collection_download_dir,
@@ -557,6 +560,8 @@ class _CardGridBase(ListWidget):
       _cover_url(item) 返回封面缩略图 URL（可 None）
       _cell_size()     返回当前单元格 QSize
       _min_cell        最小单元格 QSize
+      _copyable        为 True 时右键菜单多一项「复制表情」，默认 False
+                       （只有单个表情网格该开——见 copy_url 的三层降级）
     点击统一走 self.itemClicked(object)（载荷为 item）与 self.itemClickedAt(int, object)
     （附带下标），子类在 __init__ 转发到公开信号。
     """
@@ -564,6 +569,11 @@ class _CardGridBase(ListWidget):
     itemClicked = Signal(object)  # 载荷为卡片对应的 item
     itemClickedAt = Signal(int, object)  # (下标, item)：内容重复时也能定位
     selectionChanged = Signal()  # 勾选集合变化
+
+    # 复制能力是编译期常量，与 _card_class / _min_cell 同族；多选那种运行时可翻转的
+    # 状态才走实例属性（_selectable）。不用 isinstance(self, EmojiGrid)：基类反向
+    # 依赖子类，将来新增网格必漏判。
+    _copyable = False
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -583,6 +593,7 @@ class _CardGridBase(ListWidget):
         self._url_cards: dict[str, list] = {}
         self._items: list = []
         self._last_cell: QSize | None = None
+        self._copy_wait: str | None = None  # 「复制」等缩略图字节落盘的那个 url
         signal_bus.thumbLoaded.connect(self._on_thumb_loaded)
         # 加载失败也要收环，否则灰底上永远转着一个假的「加载中」
         signal_bus.thumbRawFailed.connect(self._on_thumb_failed)
@@ -595,6 +606,7 @@ class _CardGridBase(ListWidget):
         """items：与 _card_class 构造签名匹配的载荷对象列表。"""
         self._requested.clear()
         self._url_cards.clear()
+        self._copy_wait = None  # 换了一批卡片，等字节的那个 url 已经没意义
         self.clear()
         self._items = list(items)
         for index, it in enumerate(self._items):
@@ -633,17 +645,85 @@ class _CardGridBase(ListWidget):
                 restart()
         thumb_manager.reload(url)
 
-    def contextMenuEvent(self, event) -> None:
-        """右键卡片 →「重新加载」。加载失败后不必重开页面。"""
-        item = self.itemAt(event.pos())
-        url = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
-        if not url:
-            return
+    # ---- 右键菜单 ----
+
+    def _context_url(self, pos) -> str | None:
+        """右键落点 → 该格子的封面 url（空白处 / 没有 url 的格子返回 None）。"""
+        item = self.itemAt(pos)
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+
+    def _build_context_menu(self, url: str) -> RoundMenu:
+        """建菜单但**不弹**；exec 由调用方负责。
+
+        单独抽出来是为了可断言：`exec()` 会阻塞事件循环，屏幕外脚本没法调
+        `contextMenuEvent`，但可以直接拿 `menu.actions()` 验项列表。
+        """
         menu = RoundMenu(parent=self)
+        if self._copyable:
+            copy_action = QAction(FluentIcon.COPY.icon(), "复制表情", menu)
+            copy_action.triggered.connect(partial(self.copy_url, url))
+            menu.addAction(copy_action)
         action = QAction(FluentIcon.SYNC.icon(), "重新加载", menu)
         action.triggered.connect(partial(self.reload_url, url))
         menu.addAction(action)
-        menu.exec(event.globalPos())
+        return menu
+
+    def contextMenuEvent(self, event) -> None:
+        """右键卡片 →「复制表情」（仅表情网格）/「重新加载」。加载失败后不必重开页面。"""
+        url = self._context_url(event.pos())
+        if not url:
+            return
+        self._build_context_menu(url).exec(event.globalPos())
+
+    # ---- 复制到剪切板 ----
+
+    def copy_url(self, url: str | None) -> None:
+        """把该 url 的图放进剪切板。三档来源逐级降级：
+
+        ① `image_cache` 的**原始字节** —— 全分辨率 + 完整动图，绝大多数情况命中
+        ② 内存 `QPixmapCache` —— 磁盘那份被 LRU 淘汰时的兜底，只剩静态首帧
+        ③ 让缩略图流水线去取一次 —— 卡片还在转圈 / 刚失败时走这条
+
+        ①② 成功**不弹提示**：用户下一步就是粘贴，粘出来就是反馈，每次弹一条
+        InfoBar 只是噪音（同 `cookie_status` 的静默预拉取、`gif.py` 的「静默不播」）。
+        ③ 是异步的、菜单早关了，才需要说一声。
+
+        ① 在主线程同步读磁盘，与 `gif.py::movie_from_cache`（挂在每次悬浮上）同一取舍；
+        代价是 `DiskCache.put` 与淘汰扫描共用一把锁，最坏情况要排在某个 worker 后面。
+        """
+        if not url or not self._copyable:
+            # 闸门在这里也挡一道，不只是菜单：`_copyable` 于是真的等于
+            # 「这个网格永远不会碰剪切板」，将来接快捷键 / 卡片级菜单也不会漏
+            return
+        if self._copy_now(url):
+            return
+        # ③ 复用缩略图流水线而不是另开一条网络路径：`request()` 自带按 URL 去重，
+        # 不会与正在飞的请求并发重复；worker 在 emit 前已 `image_cache.put`
+        # （thumb.py），所以回调里再读通常仍拿得到**原始 GIF/WebP 字节**，
+        # 动图口径在 ③ 也保得住。顺带这还是「失败后手动重试一次」的出口。
+        self._copy_wait = url
+        thumb_manager.request(url)
+
+    def _copy_now(self, url: str) -> bool:
+        """立刻复制（①② 两档）；两处都没有返回 False，由调用方决定下一步。"""
+        data = image_cache.get(url)
+        if data and copy_image_bytes(data):
+            return True
+        pixmap = QPixmap()
+        return bool(QPixmapCache.find(url, pixmap) and copy_image(pixmap.toImage()))
+
+    def _finish_copy(self, url: str, ok_msg: str, fail_msg: str) -> bool:
+        """③ 的回调：命中 `_copy_wait` 就收尾并清标志。返回是否命中。"""
+        if url != self._copy_wait:
+            return False
+        # 成功与失败两条路都要清（同「清『正在飞』标志必须挂 on_finished」那条坑），
+        # 否则失败一次之后右键复制就永远卡在「等字节」
+        self._copy_wait = None
+        if self._copy_now(url):
+            notify_success("已复制", ok_msg, parent=self)
+        else:
+            notify_warning("复制失败", fail_msg, parent=self)
+        return True
 
     # ---- 卡片尺寸 ----
 
@@ -739,6 +819,8 @@ class _CardGridBase(ListWidget):
     def _on_thumb_loaded(self, url: str, pixmap) -> None:
         for card in self._url_cards.get(url, ()):
             card.set_pixmap(pixmap)
+        # ③ 的回调：worker 落盘在前、发信号在后，所以这里重读 ① 通常拿得到原始字节
+        self._finish_copy(url, "表情已复制到剪切板", "图片还没取到，请稍后重试")
 
     def _on_thumb_failed(self, url: str) -> None:
         for card in self._url_cards.get(url, ()):
@@ -747,6 +829,9 @@ class _CardGridBase(ListWidget):
                 failed()  # 收环 + 亮出「↻」重试按钮
             else:
                 self._stop_spinner(card)
+        if url == self._copy_wait:
+            self._copy_wait = None  # 失败也要清，否则之后右键复制永远卡在等字节
+            notify_warning("复制失败", "图片加载失败，请稍后重试", parent=self)
 
     @staticmethod
     def _stop_spinner(card) -> None:
@@ -798,12 +883,14 @@ class EmojiGrid(_CardGridBase):
     """表情网格：复用 _CardGridBase，卡片随视口宽度响应式填满（与收藏集网格一致）。
 
     点击任一卡片发 imageClicked(index)，索引对应 items() 返回的 (text, url) 列表。
+    右键多一项「复制表情」—— 每项都是一张能直接发出去的图，是唯一开 _copyable 的网格。
     """
 
     imageClicked = Signal(int)
 
     _card_class = EmojiCard
     _min_cell = QSize(72, 96)
+    _copyable = True
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)

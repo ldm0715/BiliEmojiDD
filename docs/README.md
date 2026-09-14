@@ -28,6 +28,7 @@ B 站表情包 / 收藏集（装扮）下载器 GUI：PySide6 + QFluentWidgets �
 | [login.md](login.md) | **扫码登录**：web 端二维码接口与状态机、Cookie 提取的双路径、专用会话工厂的浏览器 UA、轮询线程模型与关窗竞态、`segno` 二维码绘制、账号信息展示 |
 | [cookie_status.md](cookie_status.md) | **Cookie 有效性检测与状态灯**：五态状态机、有效 7 天 / 失效 30 分钟的信任期、主页状态灯配色、Cookie 有效时静默预拉取全部表情包 |
 | [live_emoji.md](live_emoji.md) | **直播间专属表情**：三个接口的实测结论（`getInfoByRoom` 被风控故不用）、`room_<id>_` 过滤口径、队列第三类要同步的五个位置、GIF 判据只看 URL 后缀（`is_dynamic` 实测不可信）、目录命名一致性 |
+| [clipboard_copy.md](clipboard_copy.md) | **右键复制表情**：CF_DIB 装不下动画、动图落文件走 CF_HDROP、`image_cache` 取原始字节的三层降级、范围只到表情网格、失败静默 |
 
 ## 快速上手
 

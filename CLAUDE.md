@@ -41,6 +41,7 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/check_gif.py                   #
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_login.py                 # 扫码登录
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_cookie_status.py         # Cookie 状态灯
 QT_QPA_PLATFORM=offscreen uv run python scripts/check_live_emoji.py            # 直播间表情
+QT_QPA_PLATFORM=offscreen uv run python scripts/check_clipboard.py             # 右键复制表情
 QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py            # 截图（**给用户人工比对，AI 不要跑**）
 
 # 性能基准（非断言，不进收尾批跑）
@@ -107,6 +108,7 @@ Windows 终端默认 GBK，中文断言文案会 `UnicodeEncodeError`——单�
 | `login.md` | 扫码登录接口与状态机、Cookie 提取双路径、轮询竞态、二维码绘制 |
 | `cookie_status.md` | 五态状态机、7 天 / 30 分钟信任期、状态灯配色、静默预拉取 |
 | `live_emoji.md` | 直播间三个接口、`room_<id>_` 过滤口径、队列第三类、两套 GIF 口径 |
+| `clipboard_copy.md` | 右键「复制表情」、CF_DIB 装不下动画 / 动图落文件走 CF_HDROP、`image_cache` 取字节的三层降级、范围只到 `EmojiGrid` |
 
 **新增功能时同步更新**：`docs/` 下新建一篇（结构参照 `download_queue.md`），并登记进
 `docs/README.md` 导航表与根 `README.md` 文档列表。

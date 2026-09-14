@@ -20,7 +20,7 @@
 | `app/components/disk_cache.py` | `DiskCache.remove(key)`：按 `_digest` 删一条缓存文件 |
 | `app/components/thumb.py` | `ThumbManager.reload(url)`：作废三层缓存后重新请求 |
 | `app/components/video_cache.py` | `VideoCacheManager.forget(url)`：清失败标记 + 临时文件 |
-| `app/components/widgets.py` | `_SpinnerMixin` 的失败态「↻」按钮；`_CardGridBase.contextMenuEvent` / `reload_url` |
+| `app/components/widgets.py` | `_SpinnerMixin` 的失败态「↻」按钮；`_CardGridBase._context_url` / `_build_context_menu` / `reload_url` |
 | `app/components/image_viewer.py` | 查看器右键 →「重新加载」当前图 |
 | `app/components/video_player.py` | 右键 / 点击失败提示 → `reload_current()` |
 | `scripts/check_reload.py` | 屏幕外断言 |
@@ -60,7 +60,10 @@ Windows 上正在播放的文件被占用删不掉，`unlink` 的 `OSError` 直�
 统一在 `_CardGridBase` 上做，六个网格（表情 / 表情包 / 收藏集 / 详情 / 视频条 / 下载队列）
 一次到位：
 
-- `contextMenuEvent`：`itemAt(pos)` → 取 `UserRole` 里的封面 url → `RoundMenu` 一项「重新加载」。
+- `_context_url(pos)` / `_build_context_menu(url)` / `contextMenuEvent`：右键落点 → 取
+  `UserRole` 里的封面 url（空白处返回 None、不弹菜单）→ `RoundMenu` 一项「重新加载」。
+  建菜单与 exec 拆开是为了可断言（`exec()` 会阻塞事件循环，屏幕外脚本调不了）——
+  详见 `clipboard_copy.md` 第 5 节，那边在同一个菜单里多了「复制表情」一项。
 - `reload_url(url)`：把 url 重新塞进 `_requested`（reload 自己会发请求，别让
   `_update_visible` 再排一次重复的）、对所有用这个 url 的卡片 `thumb_restart()`、
   最后 `thumb_manager.reload(url)`。
