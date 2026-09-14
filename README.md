@@ -69,7 +69,7 @@ uv run python main.py
 - [GIF 标识与动图预览](docs/gif_preview.md) — 卡片左下角 GIF 角标、表情详情悬浮播放、查看器打开即播
 - [扫码登录](docs/login.md) — web 端二维码接口与状态机、Cookie 提取双路径、轮询竞态、`segno` 二维码绘制
 - [Cookie 有效性检测与状态灯](docs/cookie_status.md) — 五态状态机、7 天 / 30 分钟信任期、状态灯配色、有效即静默预拉取
-- [直播间专属表情](docs/live_emoji.md) — 三个直播间接口、`room_<id>_` 过滤口径、队列第三类、GIF 与文件后缀两套口径
+- [直播间专属表情](docs/live_emoji.md) — 三个直播间接口、`room_<id>_` 过滤口径、队列第三类、GIF 判据只看 URL 后缀
 
 更新日志见 [CHANGES.md](CHANGES.md)。
 

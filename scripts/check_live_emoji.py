@@ -1,7 +1,7 @@
 """屏幕外验证「直播间专属表情」：解析口径 / 队列第三类 / 内容数量 / 目录命名 / 页面。
 
 1. `parse_emoticons` 只留 `room_<room_id>_` 前缀的表情，保序、去重、URL 归一成 https、
-   `is_dynamic` 与 `.gif` 后缀两条 GIF 判据；
+   GIF 判据只看 URL 后缀（`is_dynamic` 不可信，见 `live_emoji.emote_is_gif` 的 docstring）；
 2. `data` 的三种形状（按包分组 / 直接列表 / 空）都能解析；
 3. `set_enabled(False)` 后一个请求都不发（抛 `LiveEmojiDisabled`）；
 4. 队列判别：`item_kind` / `item_key` / `item_cover_url` 走 live 分支，且与表情包 /
@@ -96,7 +96,8 @@ FIXTURE = {
                     {
                         "emoji": "墨镜猪",
                         "url": "http://i0.hdslb.com/bfs/live/e1e80a.png",
-                        "is_dynamic": 0,
+                        # 真实接口给静态 png 也标 1：这条是「is_dynamic 不能当 GIF 判据」的回归锁
+                        "is_dynamic": 1,
                         "emoticon_unique": "room_5236391_109772",
                     },
                     {
@@ -143,7 +144,7 @@ FIXTURE = {
     },
 }
 
-print("== 1. 解析口径：只留本房间、保序去重、URL 归一、GIF 两判据 ==")
+print("== 1. 解析口径：只留本房间、保序去重、URL 归一、GIF 只看后缀 ==")
 emotes = live_emoji.parse_emoticons(FIXTURE, ROOM_ID)
 check(len(emotes) == 2, f"只留 room_ 前缀的 2 个（实际 {len(emotes)}）")
 check(
@@ -159,12 +160,21 @@ check(
     "unique 都是 room_5236391_ 前缀（room_52363911_ 不算）",
 )
 check(
-    live_emoji.emote_is_gif("https://x/a.gif", 0) and live_emoji.emote_is_gif("https://x/a.png", 1),
-    "GIF 判据取并集：.gif 后缀 或 is_dynamic",
+    live_emoji.emote_is_gif("https://x/a.gif") and live_emoji.emote_is_gif("https://x/a.webp"),
+    "GIF 判据只看后缀：QMovie 播得动的 .gif / .webp 都算",
 )
 check(
-    not live_emoji.emote_is_gif("https://x/a.png", 0),
+    not live_emoji.emote_is_gif("https://x/a.png"),
     "普通 png 不是 GIF",
+)
+check(
+    not live_emoji.emote_is_gif("https://x/a.apng"),
+    "apng 不算：PySide6 6.4.2 的 QMovie 播不了它，给角标就是骗人",
+)
+check(
+    not emotes[0].is_gif,
+    "**回归锁**：is_dynamic=1 但 URL 是 .png 的直播表情不得显 GIF 角标"
+    "（实测标 1 的全是静态 PNG，悬停/放大都播不出来）",
 )
 check(
     live_emoji.normalize_url("https://i0.hdslb.com/a.png") == "https://i0.hdslb.com/a.png"

@@ -65,10 +65,29 @@
 
 ## 3. GIF 与文件后缀：两套口径，别混
 
-- **显示口径**（网格角标 + 悬浮播放）：`emote_is_gif(url, is_dynamic)`，
-  **`is_dynamic` 标记与 `.gif` 后缀取并集**。这一位喂给 `EmojiGrid.set_emotes` 的
-  第三个元素。
-- **落盘口径**：`LiveEmote.ext()` / `expected_ext()`，**只认 URL 后缀**。
+- **显示口径**（网格角标 + 悬浮播放）：`emote_is_gif(url)`，**纯 URL 后缀白名单
+  `.gif` / `.webp`**。这一位喂给 `EmojiGrid.set_emotes` 的第三个元素。
+- **落盘口径**：`LiveEmote.ext()` / `expected_ext()`，**只认 URL 后缀**（白名单更宽，
+  含 `.png` / `.jpg`）。
+
+### 为什么显示口径不看接口的 `is_dynamic`
+
+`is_dynamic` 曾与 `.gif` 后缀取并集当判据，**这是错的，别加回来**。实测证据：
+
+- 真实缓存的两个房间响应里，标了 `is_dynamic=1` 的 **19 条**直播表情，URL 全是 `.png`，
+  落盘字节全是 **162×162 普通静态 PNG**（无 `acTL`/`fcTL`/`fdAT` 分块，连 APNG 都不是）。
+- curl 三种请求头（默认 / 浏览器 UA + `Accept: image/apng` + `Referer` / 带 query）
+  取回的字节完全一致；换成 `.gif`/`.webp`/`.apng` 后缀或换 bucket 一律 404。
+- bilibili-API-collect 的接口示例里，40 个**静态**官方表情也全标 `is_dynamic: 1`。
+
+拿它当「这张图是动图」的后果：静态图挂上 GIF 角标与「悬停播放动图」tooltip，而
+`movie_from_cache()` 的 `frameCount() <= 1` 兜到底，**悬停和放大都永远播不出来**。
+回归锁在 `scripts/check_live_emoji.py` 第 1 节（fixture 里那条 `is_dynamic=1` + `.png`）。
+
+显示口径的白名单**刻意比落盘口径窄**：只收 `QMovie` 播得动的两种容器
+（PySide6 6.4.2 实测 `QMovie.supportedFormats() == ['gif', 'webp']`），保证
+「有角标 = 真有可能播」。**`.apng` 不进来**——Qt 6.4.2 播不了 APNG，收进来就是重犯
+「角标骗人」这个错。
 
 落盘口径不能用 `is_gif` 反推，因为 `Downloader` 拿到 `expected_ext` 后若与实际内容
 的魔数不符会**直接判 FAILED**（`biliemoji/downloader.py::download`），不是自动改正

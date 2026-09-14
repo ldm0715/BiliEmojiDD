@@ -52,6 +52,10 @@ _AUTH_CODE = -101
 
 _IMAGE_SUFFIXES = (".gif", ".png", ".webp", ".jpg", ".jpeg")
 
+# 角标判据用的白名单，比 `_IMAGE_SUFFIXES` 窄：只收 `QMovie` 播得动的两种容器格式，
+# 保证「有 GIF 角标 = 真有可能播」（.apng 播不了，见 `emote_is_gif` 的注释）。
+_ANIMATABLE_SUFFIXES = (".gif", ".webp")
+
 
 class LiveEmojiError(Exception):
     """直播间表情相关错误的基类（`str(e)` 即可直接展示给用户）。"""
@@ -72,7 +76,7 @@ class LiveEmote:
     text: str  # 接口的 `emoji`，也就是表情名
     url: str  # 已归一化成 https
     unique: str  # `emoticon_unique`，如 room_5236391_109774
-    is_gif: bool
+    is_gif: bool  # 后缀白名单判出来的（`emote_is_gif`）；角标与悬停播放都看它
     raw: dict
 
     def ext(self) -> str:
@@ -175,11 +179,19 @@ def normalize_url(url: str) -> str:
     return url
 
 
-def emote_is_gif(url: str, is_dynamic) -> bool:
-    """两条判据取并集：接口的 `is_dynamic` 标记与 URL 的 `.gif` 后缀。"""
-    if is_dynamic:
-        return True
-    return Path(urlsplit(url or "").path).suffix.lower() == ".gif"
+def emote_is_gif(url: str) -> bool:
+    """只看 URL 后缀，认 `QMovie` 真能播的两种动图容器。
+
+    **不能看接口的 `is_dynamic`。** 实测标了 1 的直播表情全是静态 PNG：CDN 返回
+    162x162 单帧图（无 `acTL`/`fcTL` 分块，连 APNG 都不是），换成 `.gif`/`.webp`
+    后缀一律 404；bilibili-API-collect 的接口示例里 40 个静态官方表情也全标 1。
+    拿它当「这张图是动图」的后果是给静态图挂上 GIF 角标 + 「悬停播放动图」tooltip，
+    而 `movie_from_cache()` 的 `frameCount() <= 1` 兜到底，永远播不出来。
+
+    `.apng` 故意不在白名单里：PySide6 6.4.2 的 `QMovie.supportedFormats()` 只有
+    gif/webp，收进来就是重犯「角标骗人」这个错。
+    """
+    return Path(urlsplit(url or "").path).suffix.lower() in _ANIMATABLE_SUFFIXES
 
 
 def _build_emote(raw: Mapping[str, Any]) -> LiveEmote | None:
@@ -191,7 +203,7 @@ def _build_emote(raw: Mapping[str, Any]) -> LiveEmote | None:
         text=str(raw.get("emoji") or ""),
         url=url,
         unique=str(raw.get("emoticon_unique") or ""),
-        is_gif=emote_is_gif(url, raw.get("is_dynamic")),
+        is_gif=emote_is_gif(url),
         raw=dict(raw),
     )
 

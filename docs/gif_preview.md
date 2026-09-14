@@ -69,8 +69,14 @@ device，之后 `frameCount()` 直接段错误（不是异常，是进程没了�
 
 ## 四、items 加第三位
 
-`EmojiGrid.set_emotes` 的载荷从 `(text, url)` 变成 `(text, url, is_gif)`，
-由 `package_detail.set_package` 按 `bool(em.gif_url)` 填 —— 与它挑 `url` 的口径同源。
+`EmojiGrid.set_emotes` 的载荷从 `(text, url)` 变成 `(text, url, is_gif)`。
+两条数据流填第三位的口径**不同源，都别改**：
+
+- 表情详情 / 按 ID：`package_detail.set_package` 按 `bool(em.gif_url)` 填 —— 与它挑
+  `url`（`em.gif_url or em.url`）的口径同源，有独立动图地址才算。
+- 直播间表情：`emoji_page._LiveEmoteTab` 填 `LiveEmote.is_gif`，那是**纯 URL 后缀白名单**
+  `.gif`/`.webp`（`live_emoji.emote_is_gif`）。**接口的 `is_dynamic` 不能当判据** ——
+  实测标 1 的全是静态 PNG，会挂出播不了的假角标，详见 `docs/live_emoji.md` 第 3 节。
 
 **加第三位不会破坏既有取值**：`_CardGridBase` 走 `_cover_url(item)`（取 `item[1]`），
 `image_viewer` 也一律 `self._items[i][1]`。两元组的老调用照常能用（缺省视作静态图），
