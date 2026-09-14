@@ -1,100 +1,131 @@
-# biliEmojiDD
+<p align="center">
+  <img src="docs/images/logo.png" width="128" alt="biliEmojiDD">
+</p>
 
-B 站表情包 / 收藏集（装扮）下载器 GUI，基于 PySide6 + QFluentWidgets，功能由
-[biliemoji](https://pypi.org/project/biliemoji/) 2.0.0 SDK 提供。
+<h1 align="center">biliEmojiDD</h1>
+
+<p align="center">
+  <b>B 站表情包 / 收藏集（装扮）下载器</b><br>
+  <sub>Windows 桌面应用</sub>
+</p>
+<p align="center">
+  <a href="https://github.com/ldm0715/BiliEmojiDD/releases/latest"><img src="https://img.shields.io/github/v/release/ldm0715/BiliEmojiDD?style=flat-square&amp;label=release&amp;sort=semver&amp;logo=github&amp;logoColor=white" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue?style=flat-square&amp;logo=gnu&amp;logoColor=white" alt="License"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078d4?style=flat-square&logo=PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPGcgZmlsbD0iI2ZmZiI%2BPHJlY3QgeD0iMSIgeT0iMSIgd2lkdGg9IjEwIiBoZWlnaHQ9IjEwIi8%2BPHJlY3QgeD0iMTMiIHk9IjEiIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCIvPjxyZWN0IHg9IjEiIHk9IjEzIiB3aWR0aD0iMTAiIGhlaWdodD0iMTAiLz48cmVjdCB4PSIxMyIgeT0iMTMiIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCIvPjwvZz48L3N2Zz4%3D&logoColor=white" alt="Platform">
+  <img src="https://img.shields.io/badge/python-3.11-3776ab?style=flat-square&amp;logo=python&amp;logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/uv-0.8%2B-261230?style=flat-square&amp;logo=uv&amp;logoColor=white" alt="uv">
+</p>
+
+查找、预览、批量下载 B 站的表情包与收藏集（装扮）——不用再对着接口文档手写脚本。
+五个页面覆盖完整流程：按包 ID 查表情包、登录后拉取全部表情包、按房间号取直播间专属表情、
+关键词搜收藏集并在页面里直接播放动态视频、最后在下载队列里统一管理。
+
+## 截图
+
+<p align="center">
+  <img src="docs/images/home.png" width="900" alt="主页：状态概览与功能入口">
+</p>
 
 ## 功能
 
-- **开屏面板**：启动那几秒先亮出图标 / 名称 / 版本号与加载进度，不再是一片黑
-- **主页**（启动默认页）
-  - 应用简介 + 状态概览（Cookie 是否有效、队列数量、下载目录）
-  - Cookie 状态灯真的反映能不能用：进主页按需检测一次，失效变红；检测结论有 7 天信任期，
-    期内不再重复请求
-  - 三张功能入口卡，表情包 / 收藏集自带真实展示图，下载卡实时显示队列前 4 项封面
-  - 快速上手三步、关于（版本 / 依赖 / 链接）
-- **表情包**
-  - 登录后拉取全部表情包（默认标签），按关键词本地过滤（回车 / 放大镜触发）——
-    Cookie 确认有效后进主页会自动预拉取一次，进这页时列表已就绪
-  - 按包 ID 查询单个表情包，缩略图预览，下载（可开关 GIF 动图）
-  - **直播间专属表情**：输入直播间 room_id 拉取该房间的主播专属表情，网格预览 +
-    点开看大图，整个房间作为一个下载项加入队列（目录按「主播名 [room_id]」命名）
-- **收藏集（装扮）**
-  - 关键词搜索，封面 / 价格 / 收藏集标记展示
-  - 点击查看详情，内容分「静态图片 / 动态视频」两个标签
-  - 动态视频**直接在页面里播放**：左播放器 + 右视频网格切换，支持上一个 / 下一个、全屏
-  - 选择「图片 / 视频 / 图片+视频」下载
-- **搜索历史**：点搜索框下拉浮层面板，胶囊形记录最多 10 条，可单条删除或一键清空
-- **图片查看器**：两个详情页均可点图全屏查看，左右箭头 / 方向键 / 滚轮翻页
-- **下载队列**：会话级队列，混合表情包 + 收藏集 + 直播间表情，全选 / 删除 / 清空 / 批量下载
-- **缓存**：缩略图与接口响应落盘复用，重启后仍命中；容量上限可在设置页调整并随时清除
-- **登录**：手机 B 站客户端扫码即可拿到 Cookie，自动保存并显示昵称头像；也可手动粘贴。设置页一张卡按登录状态变样（未登录给两个入口，已登录显示头像 + 昵称 + 退出登录）
-- **设置**：B 站账号（扫码登录 / 手动填写 / 退出登录）、下载目录、代理（开关 + 地址）、下载线程数、缓存上限、主题（浅色 / 深色 / 跟随系统）、字体渲染
-- **检查更新**：设置页「关于」组可查看仓库地址、手动或开机自动检查新版本；有新版时弹窗渲染更新说明，一键下载并安装。直连 GitHub 慢时可用下载加速源（内置三家，也能自己添加），支持测速分档与拖动排序，安装包一律做 SHA-256 校验
+| 页面 | 做什么 |
+|---|---|
+| **主页** | 启动默认页。Cookie 状态灯、队列数量、下载目录一眼可见，三张入口卡直达各页 |
+| **表情包** | 全部表情包（登录后拉取，关键词本地过滤）／ 按包 ID 查询 ／ **直播间专属表情**。网格预览，点开看大图，GIF 悬浮自动播放 |
+| **收藏集** | 关键词搜索装扮与收藏集，详情页分「静态图片 / 动态视频」两个标签，**视频直接在页面里播放** |
+| **下载** | 会话级混合队列（表情包 + 收藏集 + 直播间表情），全选 / 批量下载 / 逐项进度与结果统计 |
+| **设置** | 扫码登录、下载目录、代理、下载线程数、缓存上限、主题（浅色 / 深色 / 跟随系统）、字体渲染 |
+
+几个值得一提的：
+
+- **扫码登录**——用手机 B 站客户端扫一下就有 Cookie，不必再去浏览器的开发者工具里翻
+- **右键复制表情**——表情详情网格右键直接放上剪切板，动图保留动画，不必先下载再翻文件夹
+- **内置更新**——检查新版本、渲染更新说明、一键下载安装；GitHub 直连慢可用加速镜像，
+  也能自己添加源并测速排序，安装包一律做 SHA-256 校验
+- **缓存与历史**——缩略图与接口响应落盘复用，重启后仍命中；搜索历史浮层最多记 10 条
 
 ## 安装
 
-到 [Releases](https://github.com/ldm0715/BiliEmojiDD/releases) 下载：
+到 [Releases](https://github.com/ldm0715/BiliEmojiDD/releases/latest) 下载：
 
-- `BiliEmojiDD-Setup-<版本>.exe` —— 安装包（装到当前用户目录，不需要管理员权限）
-- `BiliEmojiDD-<版本>-win64.zip` —— 便携版，解压即用
-- `SHA256SUMS.txt` —— 上面两个文件的校验和
+| 文件 | 说明 |
+|---|---|
+| `BiliEmojiDD-Setup-<版本>.exe` | 安装包。装到当前用户目录，**不需要管理员权限** |
+| `BiliEmojiDD-<版本>-win64.zip` | 便携版，解压即用 |
+| `SHA256SUMS.txt` | 上面两个文件的 SHA-256 校验和 |
+
+卸载时默认**保留** `%APPDATA%\biliEmojiDD`（配置、缓存、搜索历史），会先问你要不要一并删除。
 
 ## 从源码运行
+
+需要 **Windows 10 或更高版本**、**Python 3.11** 与 [uv](https://docs.astral.sh/uv/)。
 
 ```bash
 uv sync
 uv run python main.py
 ```
 
-## 文档
+> Python 锁在 3.11：界面库用的是 [`PySide6-Fluent-Widgets`](https://github.com/ldm0715/PyQt-Fluent-Widgets)
+> 的 PySide6 分支，它要求 `PySide6<=6.4.2`，而 6.4.2 没有 3.12 的 wheel。
 
-- [使用指南](docs/usage.md) — 页面功能、Cookie 获取、缓存、常见问题
-- [架构设计](docs/architecture.md) — 技术栈、模块分层、线程模型
-- [开发与维护](docs/development.md) — 环境、命令、代码约定、坑点
-- [下载队列与下载设置](docs/download_queue.md) — 队列工作流、代理与线程数设置
-- [收藏集页 + 混合下载队列](docs/collection_page.md) — 收藏集页改造、类别判别、混合队列
-- [详情页图片查看器](docs/image_viewer.md) — 遮罩 lightbox、letterbox 方案、上游坑
-- [UI 改进](docs/ui_polish.md) — 暗色主题补全、网格响应式填充、下载双列 + 去阴影、侧栏主题切换
-- [主题跟随 + 网格铺满 + 已下载徽标](docs/theme_grid_fixes.md) — 主题切换三处失效、详情网格右侧空白、卡片徽标
-- [设置页改版](docs/setting_page_redesign.md) — Fluent 设置卡片版式、可展开行、只改界面不改功能
-- [三页卡片版式](docs/page_card_layout.md) — 表情包 / 收藏集 / 下载页的大标题 + 命令卡 + 内容卡
-- [下载体验优化](docs/download_page_improvements.md) — GIF 选项按需显隐、队列内容数量、全部成功自动出队、加载环、去重键修复
-- [收藏集视频预览](docs/collection_video.md) — 内容分页 Pivot、内嵌播放器 + 缩略图选择条、临时缓存与黑背景坑
-- [搜索历史 + 磁盘缓存 + 应用标识](docs/search_and_cache.md) — 浮层历史面板、图片/接口落盘缓存与容量设置、窗口图标与版本号
-- [主页（欢迎页）](docs/home_page.md) — 英雄卡 + 功能入口卡 + 快速上手 / 关于、静态展示图方案、性能与布局坑
-- [代理](docs/proxy_diagnostics.md) — 开关 + 单地址框（**一律默认关**）、`trust_env=False` 断开系统代理、`net.py` 联网工厂、ProxyError 成因表与「测试」按钮
-- [应用外壳](docs/app_shell.md) — 全局字体 LXGW 文楷等宽、FreeType 渲染后端、消息提示统一挂内容区、切页去掉位移动画
-- [检查更新与打包发布](docs/update_and_packaging.md) — 版本号单点维护、更新弹窗、下载加速镜像与校验、`CHANGES.md` 发版流程、Nuitka + NSIS 与工作流
-- [重新加载](docs/reload_media.md) — 图片 / 视频加载失败后的右键菜单与可点击失败态、缓存作废顺序
-- [GIF 标识与动图预览](docs/gif_preview.md) — 卡片左下角 GIF 角标、表情详情悬浮播放、查看器打开即播
-- [扫码登录](docs/login.md) — web 端二维码接口与状态机、Cookie 提取双路径、轮询竞态、`segno` 二维码绘制
-- [Cookie 有效性检测与状态灯](docs/cookie_status.md) — 五态状态机、7 天 / 30 分钟信任期、状态灯配色、有效即静默预拉取
-- [直播间专属表情](docs/live_emoji.md) — 三个直播间接口、`room_<id>_` 过滤口径、队列第三类、GIF 判据只看 URL 后缀
-- [右键复制表情](docs/clipboard_copy.md) — CF_DIB 装不下动画、动图落文件走 CF_HDROP、三层降级、只给表情网格、失败静默
+## 使用须知
 
-更新日志见 [CHANGES.md](CHANGES.md)。
+### Cookie
 
-## Cookie
+「全部表情包」与「收藏集下载」需要登录。「设置 → 账号」里点「扫码登录」，用手机 B 站客户端
+扫码即可；扫不成也可以手动粘贴。Cookie 会过期，失效后主页状态灯会变红，重新扫一次就好。
 
-部分功能（全部表情包、收藏集下载）需要登录。「设置 → 账号 → B 站账号」里点「扫码登录」，
-用手机 B 站客户端扫二维码即可；扫不成也可点「手动填写」粘贴。Cookie 仅保存在本机
-`%APPDATA%/biliEmojiDD/config.json`，不会上传。
+Cookie 只保存在本机 `%APPDATA%/biliEmojiDD/config.json`，**不会上传到任何地方**。
 
-## 说明
+### 下载位置
 
-- 所有接口来自 B 站公开 API，可能随官方更新失效
-- 下载内容保存到 `下载目录/<表情包名>/` 或 `下载目录/<收藏集名>/`
+内容保存到 `下载目录/<表情包名>/` 或 `下载目录/<收藏集名>/`，下载目录在设置页可改。
+
+### 免责声明
+
+- 所有接口均来自 B 站**公开 API**，可能随官方更新失效
 - 仅供学习交流，请勿滥用，后果自负
 
-## 许可
+## 常见问题
+
+<details>
+<summary>提示需要登录 / 表情包列表拉不出来？</summary>
+
+「全部表情包」和「收藏集下载」都要 Cookie。到「设置 → 账号」扫码登录，或手动粘贴形如
+`SESSDATA=...; bili_jct=...` 的串。Cookie 失效后主页状态灯会变红提示你换一个。
+</details>
+
+<details>
+<summary>检查更新一直转圈 / 下载安装包很慢？</summary>
+
+检查更新走 GitHub，国内直连常常不通。到「设置 → 关于 → 下载加速」选一个镜像，或点「测速」
+挑最快的那个；也能自己加源并拖动排序。
+</details>
+
+<details>
+<summary>下载的文件在哪？缓存占多大？</summary>
+
+下载内容在设置页指定的「下载目录」下，按表情包 / 收藏集名称分文件夹。缩略图与接口响应
+缓存在 `%APPDATA%/biliEmojiDD/cache/`，容量上限可在设置页调整，也能一键清除。
+</details>
+
+## 文档
+
+- [使用指南](docs/usage.md)——页面功能、Cookie 获取、缓存、常见问题
+- [架构设计](docs/architecture.md)——技术栈、模块分层、线程模型、数据流
+- [开发与维护](docs/development.md)——环境、命令、代码约定、关键坑点
+- [检查更新与打包发布](docs/update_and_packaging.md)——版本号维护、发版流程、Nuitka + NSIS 打包
+
+按功能分类的全部文档见 [docs/README.md](docs/README.md)，版本变更见 [CHANGES.md](CHANGES.md)。
+
+## 许可与致谢
 
 本项目以 **[GPL-3.0-or-later](LICENSE)** 发布，Copyright (C) 2026 gcnanmu。
 
-依赖的许可：
+站在这些项目肩上：
 
-| 依赖 | 许可 |
-|---|---|
-| [PySide6](https://doc.qt.io/qtforpython/) | LGPLv3（允许被 GPLv3 作品吸收） |
-| [PySide6-Fluent-Widgets](https://github.com/zhiyiYo/PyQt-Fluent-Widgets) | GPLv3，**仅限非商业用途** |
-| [biliemoji](https://pypi.org/project/biliemoji/) | MIT |
-| [LXGW WenKai Mono GB](https://github.com/lxgw/LxgwWenKai)（内置字体） | SIL OFL 1.1 |
+| 依赖 | 许可 | 用途 |
+|---|---|---|
+| [PySide6](https://doc.qt.io/qtforpython/) | LGPLv3 | Qt 绑定 |
+| [PySide6-Fluent-Widgets](https://github.com/zhiyiYo/PyQt-Fluent-Widgets)（[PySide6 分支](https://github.com/ldm0715/PyQt-Fluent-Widgets)） | GPLv3，**仅限非商业用途** | Fluent 界面组件 |
+| [LXGW WenKai Mono GB](https://github.com/lxgw/LxgwWenKai) | SIL OFL 1.1 | 内置字体 |
