@@ -6,7 +6,13 @@ dist/
 build/
 .pytest_cache/
 .ruff_cache/
-.claude/
+# Claude Code 本地配置；仅放行 .claude/rules/（工程规范需进版本库）。
+# 用 .claude/* 而非 .claude/ —— 整个目录被排除时，内部文件无法再用 ! 放行。
+.claude/*
+!.claude/rules/
+# 下面两个备份含明文 ANTHROPIC_AUTH_TOKEN，已被上行规则覆盖，此处显式列出以防规则变动
+.claude/settings--.json
+.claude/settings -copy.json
 screenshots/
 # Nuitka 编译失败时吐在项目根的报告
 nuitka-crash-report.xml
