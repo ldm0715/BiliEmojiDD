@@ -242,25 +242,77 @@ class SectionCard(HeaderCardWidget):
 # （`qfluentwidgets/common/smooth_scroll.py`：`stepsTotal = fps * duration / 1000`）。
 # 主页 / 设置页这种重页面单帧重绘十几毫秒，24 帧连着画必然掉帧，手感就是「滑不动」；
 # 而滚动总距离与帧数无关（插值求和恒等于 delta），缩短时长只是把同样的位移更快交付。
+#
+# 时长固定 200，**帧率交给用户选**（设置页「外观 → 滚动帧率」，`cfg.scroll_fps`）：
+# 60 → 12 帧/格（上游默认口径）、120 → 24 帧/格。两者都满足下面的整除约束
+# （60×200 = 12000、120×200 = 24000，都是 1000 的整数倍）。
 SCROLL_DURATION = 200
 
 
 def tune_scroll(area, duration: int = SCROLL_DURATION) -> None:
-    """压低滚轮平滑的帧数，给重页面用。
+    """把滚轮平滑的帧率 / 时长按配置设上去；重页面与网格都走这里。
 
     **步数必须整除**：`stepsTotal` 是浮点数，`__smoothMove` 每帧 `-1` 后按
     `== 0` 出队。`fps * duration` 不是 1000 的整数倍时（如 duration=130 → 7.8）
     永远减不到 0，那一格滚轮会**永久留在队列里**，定时器再也不停。
 
-    上游的属性名拼错成 `scrollDelagate`（`scroll_area.py:15`），拼对了反而取不到。
+    两种容器的属性名不同，都要认：
+      - `ScrollArea`（页面）拼错成 `scrollDelagate`（`scroll_area.py:15`），拼对了反而取不到；
+      - `ListWidget` / `ListBase`（网格）是 `scrollDelegate`（`list_view.py:34`）。
+    实测一格滚轮（网格、150 张卡）：duration=400 时 24 帧、141 ms CPU、1820 次重绘；
+    duration=200 时 12 帧、62 ms CPU、872 次重绘 —— 总位移不变，只是交付更快。
+
+    `fps` 每次现读 `cfg.scroll_fps`，所以新造的滚动区域天然跟着最新设置走；
+    已经存在的那些由 `apply_scroll_fps()` 在设置页改动时刷一遍。
     """
-    delegate = getattr(area, "scrollDelagate", None)
-    if delegate is None:  # 不是 qfluentwidgets 的 ScrollArea，静默跳过
+    from app.common.config import cfg
+
+    delegate = getattr(area, "scrollDelagate", None) or getattr(
+        area, "scrollDelegate", None
+    )
+    if delegate is None:  # 既不是组件库 ScrollArea 也不是 ListBase，静默跳过
         return
+    fps = cfg.scroll_fps.value
     for scroll in (delegate.verticalSmoothScroll, delegate.horizonSmoothScroll):
-        if scroll.fps * duration % 1000:
+        if fps * duration % 1000:
             raise ValueError(
-                f"duration={duration} 配 fps={scroll.fps} 会算出非整数步数，"
+                f"fps={fps} 配 duration={duration} 会算出非整数步数，"
                 "滚动队列将永不清空"
             )
+        scroll.fps = fps
         scroll.duration = duration
+
+
+def iter_scroll_areas():
+    """产出所有带 `SmoothScrollDelegate` 的控件（按 delegate 去重）。
+
+    两种容器的属性名不同，都要认：
+      - `ScrollArea`（页面）拼错成 `scrollDelagate`（`scroll_area.py:15`），拼对了反而取不到；
+      - `ListWidget` / `ListBase`（网格）是 `scrollDelegate`（`list_view.py:34`）。
+    同一个 delegate 可能被父子控件各命中一次，所以按 id 去重。
+    """
+    from PySide6.QtWidgets import QApplication
+
+    seen: set[int] = set()
+    for widget in QApplication.allWidgets():
+        delegate = getattr(widget, "scrollDelagate", None) or getattr(
+            widget, "scrollDelegate", None
+        )
+        if delegate is None or id(delegate) in seen:
+            continue
+        seen.add(id(delegate))
+        yield widget
+
+
+def apply_scroll_fps() -> int:
+    """把当前的滚动帧率刷到**已经存在**的滚动区域上，返回刷了几个。
+
+    设置页改动「滚动帧率」后立刻调用，所以**不需要重启**。没这一步的话只有
+    之后新建的滚动区域会跟随，用户会看到「改了没反应」。
+    新建的那些在构造时就调过 `tune_scroll`，不依赖这里。
+    """
+    count = 0
+    for widget in iter_scroll_areas():
+        tune_scroll(widget)
+        count += 1
+    return count

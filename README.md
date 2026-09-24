@@ -115,6 +115,8 @@ Cookie 只保存在本机 `%APPDATA%/biliEmojiDD/config.json`，**不会上传�
 - [架构设计](docs/architecture.md)——技术栈、模块分层、线程模型、数据流
 - [开发与维护](docs/development.md)——环境、命令、代码约定、关键坑点
 - [检查更新与打包发布](docs/update_and_packaging.md)——版本号维护、发版流程、Nuitka + NSIS 打包
+- [帧率与滚动性能](docs/performance.md)——三个性能真凶的实测数字、基准口径、回退记录
+- [帧率测试怎么做](docs/fps_testing.md)——真机帧率脚本的命令、达标判据、结果解读
 
 按功能分类的全部文档见 [docs/README.md](docs/README.md)，版本变更见 [CHANGES.md](CHANGES.md)。
 

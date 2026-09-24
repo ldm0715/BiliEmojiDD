@@ -179,7 +179,10 @@ group_x = groups[0].titleLabel.mapTo(page, groups[0].titleLabel.rect().topLeft()
 card_x = _cards_of(groups[0])[0].mapTo(page, page.rect().topLeft()).x()
 check(group_x == card_x, f"分组标题 / 卡片左对齐（{group_x} / {card_x}）")
 counts = [len(_cards_of(g)) for g in groups]
-check(counts == [5, 3, 3, 2, 2], f"每组卡片数 5/3/3/2/2（实际 {counts}）")
+check(
+    counts == [5, 3, 3, 2, 3],
+    f"每组卡片数 5/3/3/2/3（外观组 主题+字体渲染+滚动帧率）（实际 {counts}）",
+)
 
 print("== 3. 下载目录副标题跟随 dirEdit ==")
 page.dirEdit.setText("X:/tmp/biliemoji")

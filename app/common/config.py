@@ -58,6 +58,13 @@ GH_MIRROR_CHAIN = tuple(v for v in GH_MIRROR_VALUES if v.startswith("http"))
 # 只有这两项：Qt 6.4.2 的 Windows 插件不认 `fontengine=gdi`（实测输出与默认逐像素相同）。
 FONT_ENGINES = ("default", "freetype")
 
+# 滚轮平滑滚动的帧率（见 app/components/page_scaffold.py::tune_scroll）。
+# 它决定「一格滚轮摊成几帧」：`步骤数 = fps * duration / 1000`，duration 固定 200 ⇒
+# 60 → 12 帧/格（上游默认口径）、120 → 24 帧/格（更跟手，绘制量翻倍）。
+# **顺序要紧**：`OptionsValidator.correct()` 把非法值兜成 `options[0]`，所以
+# 省 CPU 的 60 必须排第一 —— 配置文件被改坏时回落到它，而不是费 CPU 的 120。
+SCROLL_FPS = (60, 120)
+
 # 配置结构版本：一次性迁移靠它熄火（见 _migrate）。加新迁移时 +1。
 CONFIG_SCHEMA = 1
 
@@ -121,6 +128,10 @@ class AppConfig(QConfig):
     )
     font_engine = OptionsConfigItem(
         "Appearance", "fontEngine", "default", OptionsValidator(list(FONT_ENGINES))
+    )
+    # 滚轮平滑滚动帧率：改完即时生效（不需要重启），见 page_scaffold.apply_scroll_fps
+    scroll_fps = OptionsConfigItem(
+        "Appearance", "scrollFps", 60, OptionsValidator(list(SCROLL_FPS))
     )
     # 启动时静默检查一次新版本；无新版 / 失败都不打扰，不想联网的用户一拨即关
     auto_check_update = ConfigItem(

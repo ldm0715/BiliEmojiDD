@@ -75,7 +75,12 @@ from app.components.login_dialog import (
     show_login_dialog,
 )
 from app.components.mirror_card import MirrorSettingCard
-from app.components.page_scaffold import BusyPushButton, tune_scroll, version_badge
+from app.components.page_scaffold import (
+    BusyPushButton,
+    apply_scroll_fps,
+    tune_scroll,
+    version_badge,
+)
 from app.components.proxy_probe import PROBE_NAME, PROBE_URL, probe_proxy
 from app.components.task import run_task
 from app.components.update_dialog import show_update_dialog
@@ -84,6 +89,9 @@ from app.components.updater import NoRelease, fetch_latest_release
 _THEMES = [Theme.AUTO, Theme.LIGHT, Theme.DARK]
 # 字体渲染后端下拉：文案 -> cfg.font_engine 的取值
 _FONT_ENGINES = [("默认 (DirectWrite)", "default"), ("FreeType", "freetype")]
+# 滚动帧率下拉：文案 -> cfg.scroll_fps 的取值。**顺序与 config.SCROLL_FPS 一致**，
+# 非法值兜底取第一项（省 CPU 的那档）。
+_SCROLL_FPS = [("60 帧（省 CPU）", 60), ("120 帧（更跟手，费 CPU）", 120)]
 
 _PAGE_MARGIN = 36  # 分组左右留白（与大标题对齐）
 _LOGO_SIZE = 64  # 顶部应用图标边长
@@ -967,12 +975,30 @@ class SettingPage(QWidget):
             group,
         )
 
-        group.addSettingCards([self.themeCard, self.fontEngineCard])
+        self.scrollFpsCombo = ComboBox(group)
+        for text, value in _SCROLL_FPS:
+            self.scrollFpsCombo.addItem(text, userData=value)
+        self.scrollFpsCombo.setMinimumWidth(200)
+        fps_values = [value for _, value in _SCROLL_FPS]
+        try:
+            self.scrollFpsCombo.setCurrentIndex(fps_values.index(cfg.scroll_fps.value))
+        except ValueError:
+            self.scrollFpsCombo.setCurrentIndex(0)
+        self.scrollFpsCard = _WidgetSettingCard(
+            FluentIcon.SPEED_HIGH,
+            "滚动帧率",
+            "滚轮滚动的平滑帧数：越高越跟手，但每格滚轮的绘制量成正比增加",
+            [self.scrollFpsCombo],
+            group,
+        )
+
+        group.addSettingCards([self.themeCard, self.fontEngineCard, self.scrollFpsCard])
         self.expandLayout.addWidget(group)
         self.themeGroup = group
 
         self.themeCombo.currentIndexChanged.connect(self._on_theme_changed)
         self.fontEngineCombo.currentIndexChanged.connect(self._on_font_engine_changed)
+        self.scrollFpsCombo.currentIndexChanged.connect(self._on_scroll_fps_changed)
         signal_bus.configChanged.connect(self._sync_theme_combo)
         # ComboBox 闭合态只 setText 不 setIcon（上游行为），须自己补；
         # 且 FluentIcon 按调用瞬间的主题取黑/白 svg，主题切换后要重取
@@ -987,6 +1013,24 @@ class SettingPage(QWidget):
         notify_success(
             "已保存",
             "字体渲染将在下次启动应用时生效",
+            parent=self,
+            position=InfoBarPosition.TOP_RIGHT,
+        )
+
+    def _on_scroll_fps_changed(self, index: int) -> None:
+        """滚动帧率**即时生效**：`apply_scroll_fps` 会刷所有已存在的滚动区域。
+
+        `tune_scroll` 每次现读配置，所以之后新建的页面 / 网格也自动跟随，
+        不需要重启（也就没有「重启生效」的提示）。
+        """
+        fps = self.scrollFpsCombo.itemData(index)
+        if fps is None:
+            return
+        qconfig.set(cfg.scroll_fps, fps)
+        applied = apply_scroll_fps()
+        notify_success(
+            "已应用",
+            f"滚动帧率已设为 {fps} 帧（刷新了 {applied} 个滚动区域）",
             parent=self,
             position=InfoBarPosition.TOP_RIGHT,
         )

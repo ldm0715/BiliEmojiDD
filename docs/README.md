@@ -29,6 +29,8 @@ B 站表情包 / 收藏集（装扮）下载器 GUI：PySide6 + QFluentWidgets �
 | [cookie_status.md](cookie_status.md) | **Cookie 有效性检测与状态灯**：五态状态机、有效 7 天 / 失效 30 分钟的信任期、主页状态灯配色、Cookie 有效时静默预拉取全部表情包 |
 | [live_emoji.md](live_emoji.md) | **直播间专属表情**：三个接口的实测结论（`getInfoByRoom` 被风控故不用）、`room_<id>_` 过滤口径、队列第三类要同步的五个位置、GIF 判据只看 URL 后缀（`is_dynamic` 实测不可信）、目录命名一致性 |
 | [clipboard_copy.md](clipboard_copy.md) | **右键复制表情**：CF_DIB 装不下动画、动图落文件走 CF_HDROP、`image_cache` 取原始字节的三层降级、范围只到表情网格、失败静默 |
+| [performance.md](performance.md) | **帧率与滚动性能**：加载环空转 / IconMode 整块重绘 / 可视区间全量遍历三个真凶的实测数字、`QT_SCALE_FACTOR=1.25` 的基准口径、试过并回退的几种做法 |
+| [fps_testing.md](fps_testing.md) | **帧率测试怎么做**：真机帧率脚本的完整命令、看哪三行、达标判据、结果怎么解读（等图窗口期 / p99 尖峰）、跑不动时先查什么 |
 
 ## 快速上手
 

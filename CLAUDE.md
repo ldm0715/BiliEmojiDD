@@ -46,6 +46,9 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py            #
 
 # 性能基准（非断言，不进收尾批跑）
 QT_QPA_PLATFORM=offscreen uv run python scripts/bench_home_paint.py [--legacy] # 主页单帧重绘
+QT_QPA_PLATFORM=offscreen QT_SCALE_FACTOR=1.25 uv run python scripts/bench_grid_scroll.py [--legacy] # 网格滚动
+# 真机帧率（**要窗口，别带 QT_QPA_PLATFORM**；默认档 60 / 加 --scroll-fps 120 对比）
+uv run python scripts/bench_app_fps.py --mode scroll --page emoji --fake 300 --seconds 8 --warmup 6 --no-net
 
 # 主页展示图（非运行时；需网络，全量需 Cookie）
 uv run python scripts/fetch_showcase.py --dry-run   # 先看要抓什么
@@ -109,6 +112,8 @@ Windows 终端默认 GBK，中文断言文案会 `UnicodeEncodeError`——单�
 | `cookie_status.md` | 五态状态机、7 天 / 30 分钟信任期、状态灯配色、静默预拉取 |
 | `live_emoji.md` | 直播间三个接口、`room_<id>_` 过滤口径、队列第三类、两套 GIF 口径 |
 | `clipboard_copy.md` | 右键「复制表情」、CF_DIB 装不下动画 / 动图落文件走 CF_HDROP、`image_cache` 取字节的三层降级、范围只到 `EmojiGrid` |
+| `performance.md` | 帧率三个真凶的实测数字、加载环启停归网格管、可视区间游走、**滚动帧率设置项**、试过并回退的做法 |
+| `fps_testing.md` | **帧率怎么测**：真机脚本的完整命令、看哪三行、达标判据、结果解读、踩坑速查 |
 
 **新增功能时同步更新**：`docs/` 下新建一篇（结构参照 `download_queue.md`），并登记进
 `docs/README.md` 导航表与根 `README.md` 文档列表。
@@ -153,6 +158,12 @@ Windows 终端默认 GBK，中文断言文案会 `UnicodeEncodeError`——单�
 - **`qfluentwidgets` 的 `VideoWidget` 必须配纯黑背景**（`setBackgroundBrush`，不是 `setStyleSheet`），
   否则视频反色（`collection_video.md`）。
 - **图形特效不要叠在持续刷新的内容上**（`MaskDialogBase` 的淡入淡出 + 视频 → 全屏卡顿）。
+- **滚轮平滑帧率只有一个出口 `tune_scroll`，取值只来自 `cfg.scroll_fps`**（设置页「外观 → 滚动帧率」，
+  60 默认 / 120）。**`fps * duration % 1000` 必须整除**，否则 `stepsTotal` 是小数、`__smoothMove`
+  永远减不到 0，那一格滚轮永久留在队列里、定时器再也不停。改这个设置要
+  `apply_scroll_fps()` 刷已存在的滚动区域（新建的构造时自己读配置），**不需要重启**（`performance.md`）。
+- **加载环的启停归网格管**（`_CardGridBase._sync_spinners` 只动差集，`hideEvent` 停光、`showEvent` 对齐）；
+  卡片级默认仍是「建卡即转」，独立建卡的断言靠这个默认值（`performance.md`）。
 
 **qfluentwidgets 用法**
 
@@ -189,6 +200,12 @@ Windows 终端默认 GBK，中文断言文案会 `UnicodeEncodeError`——单�
 - 涉及后台任务**必须轮询等任务完成再退出**（否则看到 `Internal C++ object already deleted` 假象）；
   等属性动画要**等真实时间**（`processEvents()` + `time.sleep`，并轮询 `QPropertyAnimation.state()`）。
 - 隐藏的 Tab 不参与布局，几何断言前先切到该页；弹窗用 `show()` 而非 `exec()`。
+- **量帧率不要用手写 `processEvents()` + `time.sleep()` 循环**：Windows 会把 2 ms 的休眠放大到
+  ~15.6 ms，循环每秒只转 60 来次，**可测帧率被卡在 ~64 fps**，120 帧那档永远量不出来。
+  用 `app.exec()` + `QTimer`（`scripts/bench_app_fps.py`），或只看不依赖测量方式的「绘制占用」（`fps_testing.md`）。
+- **`bench_*.py` 不联网、不弹窗**：假图 URL 预置进 `QPixmapCache`（缓存上限 64 MB，用 128×128 的小图，
+  600×600 × 300 张会把先塞的挤掉、退化成真网络请求）；真机帧率那条**不能带 `QT_QPA_PLATFORM=offscreen`**，
+  且要 `--no-net`（否则更新检查 / Cookie 探测在 idle 也刷出几百次重绘）。
 
 ## biliemoji 2.0.0 要点
 

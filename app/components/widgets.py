@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from functools import partial
 
-from PySide6.QtCore import QEvent, QRect, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QAction, QCursor, QIcon, QPixmap, QPixmapCache
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -46,6 +46,7 @@ from app.components.download_runner import (
 )
 from app.components.dress_helpers import category_name, is_collection
 from app.components.gif import movie_from_cache, package_has_gif
+from app.components.page_scaffold import tune_scroll
 from app.components.thumb import thumb_manager
 
 _PACKAGE_CELL = QSize(160, 160)
@@ -72,6 +73,35 @@ def _make_gif_badge(parent: QWidget):
     # 角标只是标记，不能吃掉图片区的点击 / 悬浮
     badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
     return badge
+
+
+def _apply_card_bg(card, class_name: str, checked: bool) -> None:
+    """选中态背景（`rgba(accent, 70)` + 圆角 + 内缩）与未选中态的透明底。
+
+    类选择器限定自身：避免通用 `*` 规则把背景级联到子 label（文字区整块上色）。
+    `margin` 让高亮从卡片边缘内缩：`QListView` 在 gridSize 模式下把首列卡片右移
+    一格、其余列不移，卡片自身留不出均匀间隙，只能内缩背景来分隔相邻卡片。
+
+    **幂等**：状态（选中与否 + 主题色）没变就直接返回。建卡时会连着调三次 ——
+    `__init__` 一次、`set_selectable` 一次、`bind_theme` 的首次回调一次 ——
+    实测 30 张卡里 `setStyleSheet` 占建卡总耗时（461 ms）的 30%，幂等后只剩一次。
+    """
+    accent = card._accent if (card._selectable and checked) else None
+    state = (accent.name() if accent is not None else None)
+    if getattr(card, "_bg_state", None) == state:
+        return
+    card._bg_state = state
+    if accent is not None:
+        card.setStyleSheet(
+            f"{class_name} {{ background-color:"
+            f" rgba({accent.red()}, {accent.green()}, {accent.blue()}, 70);"
+            f" margin: {_SEL_INSET}px; border-radius: 6px; }}"
+        )
+    else:
+        card.setStyleSheet(
+            f"{class_name} {{ background-color: transparent;"
+            f" margin: {_SEL_INSET}px; }}"
+        )
 
 
 class _GifBadgeMixin:
@@ -127,6 +157,11 @@ class _SpinnerMixin:
         self._spinner.setStrokeWidth(3)
         # 点击穿透：加载环盖在图片按钮上，不能吃掉点击
         self._spinner.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        # 独立建卡（不在网格里）默认就转，与改动前一致；网格会把视口外的卡关掉，
+        # 见 _CardGridBase._sync_spinners。**不能在这里就置 False**：`check_*.py`
+        # 里直接建卡断言「建卡即在转」的用例全靠这个默认值。
+        self._spinner_wanted = True
+        self._thumb_pending = True
         self._spinner.start()
         # 重试按钮反过来必须能收到点击，所以不设穿透
         self._retryBtn = TransparentToolButton(FluentIcon.SYNC, self)
@@ -160,6 +195,7 @@ class _SpinnerMixin:
 
     def thumb_done(self) -> None:
         """图片到位：停动画并隐藏（幂等）。"""
+        self._thumb_pending = False
         self._hide_spinner()
         retry = getattr(self, "_retryBtn", None)
         if retry is not None:
@@ -167,6 +203,7 @@ class _SpinnerMixin:
 
     def thumb_failed(self) -> None:
         """确认取不到：收环、改显示重试按钮（网格的失败回调走这里）。"""
+        self._thumb_pending = False
         self._hide_spinner()
         retry = getattr(self, "_retryBtn", None)
         if retry is None or not retry.isHidden():
@@ -175,15 +212,90 @@ class _SpinnerMixin:
         self._relayout_overlay()
 
     def thumb_restart(self) -> None:
-        """重新开始加载：藏掉重试按钮、转回加载环（幂等）。"""
+        """重新开始加载：藏掉重试按钮、转回加载环（幂等）。
+
+        尊重 `_spinner_wanted`：网格把视口外的卡关掉之后，右键「重新加载」不该把
+        那些卡的环重新点着（它们还在视口外，转起来只会白烧 CPU）。
+        """
+        self._thumb_pending = True
         retry = getattr(self, "_retryBtn", None)
         if retry is not None:
             retry.hide()
+        if getattr(self, "_spinner_wanted", True):
+            self._show_spinner()
+
+    def set_spinner_wanted(self, wanted: bool) -> None:
+        """由所在网格调用：这张卡此刻该不该转加载环（幂等）。
+
+        缩略图只对可见项请求，视口外与隐藏页里的卡永远等不到 `thumb_done`，环会
+        60Hz 空转下去 —— 实测 150 张卡常驻 **41.7% 单核**，且环每次 tick 会把整块
+        网格 viewport 拖进重绘。关掉之后这两种情况都归零（实测 0.0%）。
+        """
+        self._spinner_wanted = bool(wanted)
+        if self._spinner_wanted:
+            self._show_spinner()
+        else:
+            self._hide_spinner()
+
+    def waiting_thumb(self) -> bool:
+        """还在等图：网格据此决定哪些可见卡该转环。
+
+        单独一个状态位而不是现算「`_last_pixmap` 为空」：右键「重新加载」时旧图仍
+        留在卡上、新图在飞，那时环必须照转（`check_reload.py` 断言的正是这条）。
+        """
+        return getattr(self, "_thumb_pending", True)
+
+    def _show_spinner(self) -> None:
         spinner = getattr(self, "_spinner", None)
         if spinner is not None and spinner.isHidden():
             spinner.show()
             spinner.start()
             self._relayout_overlay()
+
+    def _rescale(self, pm, size: QSize):
+        """memo 过的 `SmoothTransformation`；尺寸与源图都没变时返回 None（调用方跳过）。
+
+        `resizeEvent` 无条件调它，而窗口宽度一变 `_layout_items` 就给每张卡
+        `setFixedSize` → 每张卡重缩放一次。实测 300 张卡每次 43–49 ms，拖窗口时
+        每帧都做。比的是 `is`（同一对象）而不是内容相等：`QPixmap.__eq__` 要逐像素
+        比，那比重缩放还贵。
+        """
+        memo = getattr(self, "_pixmap_memo", None)
+        if memo is not None and memo[0] is pm and memo[1] == size:
+            return None
+        self._pixmap_memo = (pm, size)
+        return pm.scaled(
+            size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+    def _apply_scaled_icon(self, image_widget: QWidget) -> None:
+        """`_last_pixmap` 缩放后设成控件图标（`QPushButton` 路径）。"""
+        pm = getattr(self, "_last_pixmap", None)
+        if pm is None or pm.isNull():
+            return
+        rect = image_widget.rect()
+        if rect.isEmpty():
+            return
+        scaled = self._rescale(pm, rect.size())
+        if scaled is None:
+            return
+        image_widget.setIcon(QIcon(scaled))
+        image_widget.setIconSize(scaled.size())
+
+    def _apply_scaled_pixmap(self, label: QWidget) -> None:
+        """`_last_pixmap` 缩放后设成控件 pixmap（`QLabel` 路径）。"""
+        pm = getattr(self, "_last_pixmap", None)
+        if pm is None or pm.isNull():
+            return
+        size = label.size()
+        if size.isEmpty():
+            return
+        scaled = self._rescale(pm, size)
+        if scaled is None:
+            return
+        label.setPixmap(scaled)
 
     def _hide_spinner(self) -> None:
         spinner = getattr(self, "_spinner", None)
@@ -299,16 +411,7 @@ class EmojiCard(_GifBadgeMixin, _SpinnerMixin, QWidget):
         self._apply_static()
 
     def _apply_static(self) -> None:
-        pm = self._last_pixmap
-        if pm is None or pm.isNull():
-            return
-        self.iconLabel.setPixmap(
-            pm.scaled(
-                self.iconLabel.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        )
+        self._apply_scaled_pixmap(self.iconLabel)
 
     # ---- 悬浮播放 ----
 
@@ -491,19 +594,7 @@ class PackageCard(_GifBadgeMixin, _SpinnerMixin, QWidget):
         self._apply_pixmap()
 
     def _apply_pixmap(self) -> None:
-        pm = self._last_pixmap
-        if pm is None or pm.isNull():
-            return
-        rect = self.imageBtn.rect()
-        if rect.isEmpty():
-            return
-        scaled = pm.scaled(
-            rect.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self.imageBtn.setIcon(QIcon(scaled))
-        self.imageBtn.setIconSize(scaled.size())
+        self._apply_scaled_icon(self.imageBtn)
 
     def _on_image_clicked(self) -> None:
         if self._selectable:
@@ -520,20 +611,7 @@ class PackageCard(_GifBadgeMixin, _SpinnerMixin, QWidget):
         self._apply_bg(self.checkBox.isChecked())
 
     def _apply_bg(self, checked: bool) -> None:
-        # 类选择器限定自身：避免通用 * 规则把背景级联到子 label（文字区整块上色）
-        # margin 让高亮从卡片边缘内缩：QListView 在 gridSize 模式下把首列卡片右移
-        # 一格、其余列不移，卡片自身留不出均匀间隙，只能内缩背景来分隔相邻卡片
-        if self._selectable and checked:
-            a = self._accent
-            self.setStyleSheet(
-                f"PackageCard {{ background-color: rgba({a.red()}, {a.green()}, {a.blue()}, 70);"
-                f" margin: {_SEL_INSET}px; border-radius: 6px; }}"
-            )
-        else:
-            self.setStyleSheet(
-                f"PackageCard {{ background-color: transparent;"
-                f" margin: {_SEL_INSET}px; }}"
-            )
+        _apply_card_bg(self, "PackageCard", checked)
 
     def mousePressEvent(self, event) -> None:
         # 图片区由 imageBtn 处理；文字区点击同样切换
@@ -593,12 +671,16 @@ class _CardGridBase(ListWidget):
         self._url_cards: dict[str, list] = {}
         self._items: list = []
         self._last_cell: QSize | None = None
+        self._ringed: set[int] = set()  # 当前被我们点着加载环的卡下标（差集同步用）
         self._copy_wait: str | None = None  # 「复制」等缩略图字节落盘的那个 url
         signal_bus.thumbLoaded.connect(self._on_thumb_loaded)
         # 加载失败也要收环，否则灰底上永远转着一个假的「加载中」
         signal_bus.thumbRawFailed.connect(self._on_thumb_failed)
         # 垂直滚动条出现/消失会收窄视口，双列网格（QueueList）需随之重排，防横向溢出
         self.verticalScrollBar().rangeChanged.connect(lambda *_: self._layout_items())
+        # 网格自己也有平滑滚动（`ListBase` 的 SmoothScrollDelegate），一直用的库默认
+        # 400 ms = 一格滚轮摊 24 帧。网格每帧要整块重绘，24 帧就是 24 次全量绘制。
+        tune_scroll(self)
 
     # ---- 数据填充 ----
 
@@ -606,6 +688,7 @@ class _CardGridBase(ListWidget):
         """items：与 _card_class 构造签名匹配的载荷对象列表。"""
         self._requested.clear()
         self._url_cards.clear()
+        self._ringed.clear()  # 旧卡已随 clear() 销毁，环的记账跟着作废
         self._copy_wait = None  # 换了一批卡片，等字节的那个 url 已经没意义
         self.clear()
         self._items = list(items)
@@ -629,6 +712,9 @@ class _CardGridBase(ListWidget):
                 # 没有封面地址 → 永远不会有 thumbLoaded/thumbRawFailed，立即收环
                 self._stop_spinner(card)
         self._last_cell = None  # 强制首次重排
+        # 每张卡构造时自己就 start() 了（独立建卡的契约），所以记账要从「全都在转」起算，
+        # 否则 `_ringed` 是空的、视口外那些环永远没人关
+        self._ringed = set(range(self.count()))
         self._layout_items()
         self._update_visible()
 
@@ -644,6 +730,9 @@ class _CardGridBase(ListWidget):
             if callable(restart):
                 restart()
         thumb_manager.reload(url)
+        # `thumb_restart` 只对「该转的卡」开环（视口外的保持关着），这里把账对齐一次：
+        # 视口内的卡重新进 _ringed，视口外的继续关着
+        self._update_visible()
 
     # ---- 右键菜单 ----
 
@@ -737,6 +826,9 @@ class _CardGridBase(ListWidget):
         self._last_cell = cell
         self.setGridSize(cell)
         for i in range(self.count()):
+            # 逐项 `setSizeHint` **不能省**：只 `setGridSize` 会让部分卡片溢出视口
+            # 右边（`check_improvements.py` 的「无横向溢出」断言量到 900/420 两档都漏），
+            # 即使已 `setUniformItemSizes(True)`。试过、回退了。
             item = self.item(i)
             item.setSizeHint(cell)
             w = self.itemWidget(item)
@@ -805,9 +897,60 @@ class _CardGridBase(ListWidget):
         self._layout_items()
         self._update_visible()
 
+    def hideEvent(self, event) -> None:
+        # 切到别的页时 QStackedWidget 只发 hide：不在这里收环的话，隐藏页里所有卡片
+        # 的加载环会一直空转下去（实测 150 张卡 19.5% 单核，纯动画机制、零绘制）
+        super().hideEvent(event)
+        self._sync_spinners(0, -1)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._update_visible()  # 对齐回来：可见且还在等图的卡重新开环
+
+    def _visible_index_range(self) -> tuple[int, int] | None:
+        """视口内可见项的闭区间 `[first, last]`；布局未就绪返回 None（调用方回退全量）。
+
+        **不能拿 indexAt 取两端**：IconMode 下右下角逐点常落在最后一列右边的空隙里
+        （实测 viewport 1072 / 单元格 177 = 6.05 列），返回无效 index。只用左上角
+        当种子，再向两侧有界游走 —— 游走判据与旧全量遍历**是同一条**
+        （`visualItemRect(...).intersects(viewport)`），行为等价是构造出来的。
+
+        工作量 `O(可见项 + 2×列数)`：N=300 时从 0.71 ms/次降到 ~0.1 ms，而
+        `scrollContentsBy` 每个像素步都要跑一次。
+        """
+        viewport = self.viewport().rect()
+        seed = self.indexAt(QPoint(1, 1))
+        if not seed.isValid():
+            return None  # 顶边压在行空隙上 / 布局还没就绪 → 回退全量
+        cols = max(1, viewport.width() // max(1, self._cell_size().width()))
+        first = last = seed.row()
+        # 往上补齐被视口顶边压住的那一行；护栏防死循环（最多两行）
+        i = first
+        while i > 0 and first >= seed.row() - 2 * cols:
+            if not self.visualItemRect(self.item(i - 1)).intersects(viewport):
+                break
+            i -= 1
+            first = i
+        i = last
+        while i + 1 < self.count():
+            if not self.visualItemRect(self.item(i + 1)).intersects(viewport):
+                break
+            i += 1
+            last = i
+        return first, last
+
+    def _visible_indices(self) -> range:
+        """可见项下标；区间拿不到时回退全量（老行为）。"""
+        span = self._visible_index_range()
+        if span is None:
+            return range(self.count())
+        return range(span[0], span[1] + 1)
+
     def _update_visible(self) -> None:
         viewport = self.viewport().rect()
-        for i in range(self.count()):
+        span = self._visible_index_range()
+        indices = range(span[0], span[1] + 1) if span else range(self.count())
+        for i in indices:
             item = self.item(i)
             if not self.visualItemRect(item).intersects(viewport):
                 continue
@@ -815,6 +958,35 @@ class _CardGridBase(ListWidget):
             if url and url not in self._requested:
                 self._requested.add(url)
                 thumb_manager.request(url)
+        if span:
+            self._sync_spinners(span[0], span[1])
+
+    def _sync_spinners(self, first: int, last: int) -> None:
+        """把加载环对齐到「可见 且 还在等图」的卡上（只动差集，幂等）。
+
+        last < first 表示「一张都不该转」（隐藏页 / 空网格）。只处理差集而不对全部
+        item 无条件开关：后者会把网格里本来在转的环反复 stop/start，每次都重建动画、
+        每次 `update()` 都把整块 viewport 拖进重绘。
+        """
+        if not self.isVisible():
+            wanted: set[int] = set()
+        else:
+            wanted = {
+                i
+                for i in range(first, last + 1)
+                if (card := self.itemWidget(self.item(i))) is not None
+                and getattr(card, "waiting_thumb", None) is not None
+                and card.waiting_thumb()
+            }
+        for i in self._ringed - wanted:
+            card = self.itemWidget(self.item(i))
+            if card is not None:
+                card.set_spinner_wanted(False)
+        for i in wanted - self._ringed:
+            card = self.itemWidget(self.item(i))
+            if card is not None:
+                card.set_spinner_wanted(True)
+        self._ringed = wanted
 
     def _on_thumb_loaded(self, url: str, pixmap) -> None:
         for card in self._url_cards.get(url, ()):
@@ -1075,20 +1247,7 @@ class DressCard(_SpinnerMixin, QWidget):
         self.toggled.emit(self.summary, checked)
 
     def _apply_bg(self, checked: bool) -> None:
-        # 类选择器限定自身：避免通用 * 规则把背景级联到子 label（文字区整块上色）
-        # margin 让高亮从卡片边缘内缩：QListView 在 gridSize 模式下把首列卡片右移
-        # 一格、其余列不移，卡片自身留不出均匀间隙，只能内缩背景来分隔相邻卡片
-        if self._selectable and checked:
-            a = self._accent
-            self.setStyleSheet(
-                f"DressCard {{ background-color: rgba({a.red()}, {a.green()}, {a.blue()}, 70);"
-                f" margin: {_SEL_INSET}px; border-radius: 6px; }}"
-            )
-        else:
-            self.setStyleSheet(
-                f"DressCard {{ background-color: transparent;"
-                f" margin: {_SEL_INSET}px; }}"
-            )
+        _apply_card_bg(self, "DressCard", checked)
 
     def mousePressEvent(self, event) -> None:
         # 图片区由 imageBtn 处理；文字/空白区点击同样切换
@@ -1108,19 +1267,7 @@ class DressCard(_SpinnerMixin, QWidget):
         self._apply_pixmap()
 
     def _apply_pixmap(self) -> None:
-        pm = self._last_pixmap
-        if pm is None or pm.isNull():
-            return
-        rect = self.imageBtn.rect()
-        if rect.isEmpty():
-            return
-        scaled = pm.scaled(
-            rect.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self.imageBtn.setIcon(QIcon(scaled))
-        self.imageBtn.setIconSize(scaled.size())
+        self._apply_scaled_icon(self.imageBtn)
 
 
 class DressGrid(_CardGridBase):
@@ -1233,19 +1380,7 @@ class DetailCard(_SpinnerMixin, QWidget):
         self._apply_pixmap()
 
     def _apply_pixmap(self) -> None:
-        pm = self._last_pixmap
-        if pm is None or pm.isNull():
-            return
-        rect = self.imageBtn.rect()
-        if rect.isEmpty():
-            return
-        scaled = pm.scaled(
-            rect.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self.imageBtn.setIcon(QIcon(scaled))
-        self.imageBtn.setIconSize(scaled.size())
+        self._apply_scaled_icon(self.imageBtn)
 
 
 class DressDetailGrid(_CardGridBase):
@@ -1615,20 +1750,7 @@ class QueueCard(_SpinnerMixin, QWidget):
         self.toggled.emit(self.item, checked)
 
     def _apply_bg(self, checked: bool) -> None:
-        # 类选择器限定自身：避免通用 * 规则把背景级联到子 label（文字区整块上色）
-        # margin 让高亮从卡片边缘内缩：QListView 在 gridSize 模式下把首列卡片右移
-        # 一格、其余列不移，卡片自身留不出均匀间隙，只能内缩背景来分隔相邻卡片
-        if self._selectable and checked:
-            a = self._accent
-            self.setStyleSheet(
-                f"QueueCard {{ background-color: rgba({a.red()}, {a.green()}, {a.blue()}, 70);"
-                f" margin: {_SEL_INSET}px; border-radius: 6px; }}"
-            )
-        else:
-            self.setStyleSheet(
-                f"QueueCard {{ background-color: transparent;"
-                f" margin: {_SEL_INSET}px; }}"
-            )
+        _apply_card_bg(self, "QueueCard", checked)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -1647,19 +1769,7 @@ class QueueCard(_SpinnerMixin, QWidget):
         self._apply_pixmap()
 
     def _apply_pixmap(self) -> None:
-        pm = self._last_pixmap
-        if pm is None or pm.isNull():
-            return
-        rect = self.imageBtn.rect()
-        if rect.isEmpty():
-            return
-        scaled = pm.scaled(
-            rect.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self.imageBtn.setIcon(QIcon(scaled))
-        self.imageBtn.setIconSize(scaled.size())
+        self._apply_scaled_icon(self.imageBtn)
 
 
 class QueueList(_CardGridBase):
@@ -1686,11 +1796,10 @@ class QueueList(_CardGridBase):
 
     def _update_visible(self) -> None:
         super()._update_visible()
-        # 队列项大多不带明细，可见时才拉详情算「多少图片 / 多少视频」
-        viewport = self.viewport().rect()
-        for i in range(self.count()):
-            if not self.visualItemRect(self.item(i)).intersects(viewport):
-                continue
+        # 队列项大多不带明细，可见时才拉详情算「多少图片 / 多少视频」。
+        # 复用基类的可视区间而不是再全量遍历一遍：滚动每个像素步都要跑，队列上百项时
+        # 这里是 0.7 ms/次 × 2 的量级
+        for i in self._visible_indices():
             card = self.itemWidget(self.item(i))
             if card is not None:
                 content_meta.request(card.item)
