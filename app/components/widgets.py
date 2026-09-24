@@ -390,11 +390,19 @@ class EmojiCard(_GifBadgeMixin, _SpinnerMixin, QWidget):
         self.textLabel.setFixedWidth(size.width() - 8)
         # 播放中改尺寸的话 movie 的 scaledSize 已过期，停掉等下次悬浮重来
         self._stop_movie()
+        # 重设 pixmap 必须在 iconLabel 改完尺寸**之后**：上面那句 setFixedSize 触发的
+        # resizeEvent 跑在这两行之前，那时量到的还是旧图标框。
+        self._apply_static()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._center_spinner(self.iconLabel.geometry())
         self._pin_gif_badge()
+        # 布局直接改卡片尺寸时也要重设：`QLabel` 不会自己缩放 pixmap（没设
+        # scaledContents），漏了这句缩略图就停在旧尺寸上——放大窗口看着过小、
+        # 缩窗口被裁掉看着像「放大」。四个 `_apply_pixmap` 的卡片没有这个问题，
+        # 因为 `QPushButton.setIcon` 那一路会被 `_rescale` 重算一次。
+        self._apply_static()
 
     def set_selectable(self, selectable: bool) -> None:
         """契约占位：表情不支持多选。"""

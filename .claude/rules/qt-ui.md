@@ -55,6 +55,14 @@
   卡片必须 `setSizePolicy(Expanding, Expanding)`。
 - 图标缩放走 memo 化的 `_apply_scaled_icon` / `_apply_scaled_pixmap` / `_rescale`，
   比较用 `is` 而非 `==`（`QPixmap.__eq__` 逐像素比，比重缩放还贵）。
+- **卡片尺寸一变就必须重设图标 / pixmap**：`QLabel` 不会自己缩放 pixmap（没设
+  `scaledContents`），`QPushButton.setIcon` 也不会——缩略图会停在旧尺寸上，放大窗口看着过小、
+  缩窗口被裁成「放大」。五张卡片里只有 `EmojiCard` 漏了这句，所以**只有表情包详情**出问题，
+  收藏集详情的 `DetailCard` 没事。新增卡片时照抄 `DetailCard.resizeEvent`。
+- `EmojiCard.set_cell` 里的重设必须在 `iconLabel.setFixedSize()` **之后**：前面那句
+  `self.setFixedSize(size)` 触发的 `resizeEvent` 跑在改图标框之前，那时量到的还是旧尺寸，
+  只在 `resizeEvent` 里补是不够的。断言在 `scripts/check_grid_reflow.py` 第 7 节
+  （量 `iconLabel.pixmap().width() == iconLabel.width()`）。
 - `DressCard` 名称 `setWordWrap(True)` + 固定两行高（`_NAME_H = 40` / `_TEXT_H = 76`）
   + `ToolTipFilter(self, 500, ToolTipPosition.TOP)` + `setToolTip(完整名)`。
 

@@ -49,6 +49,7 @@
   # EmojiGrid 高 = w + 36（图标 + 底部文字）
   ```
 - `EmojiCard` 复用 `_CardGridBase` 契约：`set_cell` 里图标随单元格缩放、文字宽度对齐；补 `set_selectable`/`toggled`/`is_checked` 占位（表情不支持多选）。
+  - **光改图标区尺寸不够，还得重设图**：表情详情的图标走 `QLabel.setPixmap`，而 `QLabel` 不会自己缩放 pixmap（没设 `scaledContents`），`QPushButton.setIcon` 那一路同理。漏了重设，缩略图就停在旧尺寸上——放大窗口看着过小、缩窗口被裁掉看着像「放大」。现在 `resizeEvent` 与 `set_cell` 各补一次 `_apply_static()`；后者必须在 `iconLabel.setFixedSize()` **之后**，因为前面那句 `self.setFixedSize(size)` 触发的 `resizeEvent` 跑在改图标框之前，那时量到的还是旧尺寸。其余四张卡片（`PackageCard` / `DressCard` / `DetailCard` / `QueueCard`）一直在 `resizeEvent` 里调 `_apply_pixmap()`，没有这个问题。
 - **踩坑**：QPushButton 垂直 size policy 默认 `Fixed`，`QVBoxLayout` 加 `stretch=1` 也拉不撑——重构 `PackageCard` 时漏了 `setSizePolicy(Expanding, Expanding)`，图片被压成 sizeHint 高度、卡片大量空白（CLAUDE.md 已记此坑，又踩一次）。
 
 ### 3. 下载队列双列 + 去阴影
