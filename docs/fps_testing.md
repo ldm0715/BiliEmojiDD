@@ -19,7 +19,8 @@ export PYTHONIOENCODING=utf-8          # Windows 终端默认 GBK，中文输出
 # ① 稳态：缩略图立即命中、不联网、不依赖 Cookie —— 可复现的基准
 uv run python scripts/bench_app_fps.py --mode idle   --page emoji --fake 300 --seconds 6  --warmup 6 --no-net
 uv run python scripts/bench_app_fps.py --mode scroll --page emoji --fake 300 --seconds 10 --warmup 6 --no-net
-uv run python scripts/bench_app_fps.py --mode switch --seconds 10 --warmup 6 --no-net
+uv run python scripts/bench_app_fps.py --mode switch --rate 0.4 --seconds 10 --warmup 6 --no-net
+uv run python scripts/bench_app_fps.py --mode theme  --rate 1.0 --seconds 10 --warmup 6 --no-net
 uv run python scripts/bench_app_fps.py --mode resize --seconds 8  --warmup 6 --no-net
 
 # ② 等图窗口期：缩略图延迟 800 ms 才到，加载环真的转起来 —— **本轮优化真正见效的场景**
@@ -66,7 +67,8 @@ PowerShell 把第一句换成 `$env:PYTHONIOENCODING="utf-8"`，其余照抄。
 |---|---|
 | `--mode idle` | **重绘 0 次**。只要不是 0，看下面「重绘来源」那几行点名是谁，把输出贴回来 |
 | `--mode scroll --fake 300` | 反推帧率 **≈60**，单帧重绘 中位 **≤ 8 ms**、p99 **≤ 16 ms** |
-| `--mode switch` | 全程没有 > 100 ms 的停顿 |
+| `--mode switch` | 看**单帧重绘耗时**：滑快照应该只有 1~3 ms（改前移动真页面是 5~18 ms/帧）。**「最长停顿」在切页模式下会把两次切换之间的空闲算进去，别当卡顿看**；默认 `--rate 0.2` 比真人密得多（会一路打断 300ms 的动画），量动画加 `--rate 0.4` |
+| `--mode theme` | 看「最长停顿」那一笔。切主题是**同步卡主线程**（全量重刷 QSS），改前空应用 ~350 ms、塞 300 张卡 ~1.9 s；改后空应用 ~125 ms、739 个注册控件 ~420 ms。建议 `--rate 1.0` |
 | `--mode resize` | 单次宽度变化 ≤ 60 ms |
 | `--thumb-delay 800` | 看当前 vs `--legacy` 的差值 —— 唯一能体现本轮优化的场景 |
 

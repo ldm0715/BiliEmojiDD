@@ -1057,7 +1057,8 @@ class SettingPage(QWidget):
         theme = self.themeCombo.itemData(index)
         if theme is None:
             return
-        # 先 setTheme 再存 cfg.theme：保证保存时 QFluentWidgets.ThemeMode 与应用主题一致
-        setTheme(theme)
+        # 先 setTheme 再存 cfg.theme：保证保存时 QFluentWidgets.ThemeMode 与应用主题一致。
+        # lazy=True 同 `MainWindow._toggle_theme`：没在画的控件改由上游在它下次绘制时补刷
+        setTheme(theme, lazy=True)
         qconfig.set(cfg.theme, theme)
         self._sync_theme_icon()

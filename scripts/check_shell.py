@@ -1,4 +1,4 @@
-"""屏幕外验证应用外壳：消息提示位置 + 全局字体 + 切页无动画。
+"""屏幕外验证应用外壳：消息提示位置 + 全局字体 + 切页滑入。
 
 1. `notify_*` 无论从哪个页面发出，InfoBar 都挂到窗口的**内容区**
    （`FluentWindow.stackedWidget`，即标题栏以下 / 侧栏以右）的右上角；
@@ -6,7 +6,7 @@
 3. 没有 FluentWindow 时（脚本单独构页）父级原样退回，不抛；
 4. 内置字体加载成功并成为应用默认字体；
 5. **qfluentwidgets 的 getFont 补丁生效** —— 库里硬编码字体族，光 setFont 改不动组件库控件；
-6. **切页不做位移动画** —— 上游 300ms 的整页 pos 动画会把整页重绘十几帧。
+6. **切页滑的是快照** —— 状态一轮事件循环内就位，动画期间真页面藏着不重绘。
 
 用法：QT_QPA_PLATFORM=offscreen uv run python scripts/check_shell.py
 """
@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # 项目根
 os.environ["APPDATA"] = tempfile.mkdtemp(prefix="biliEmojiDD-check-")
 
 from PySide6.QtCore import QAbstractAnimation
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
 app = QApplication(sys.argv)
 
@@ -209,32 +209,83 @@ settle()
 check(bar2.isVisible(), "切到别的页面后消息仍然可见（挂子页会被 QStackedWidget 藏掉）")
 check(bar2.parent() is window.stackedWidget, "第二条也挂在内容区")
 
-print("== 5. 切页不做位移动画 ==")
+print("== 5. 切页滑入：状态即时生效，动画滑的是快照 ==")
 view = window.stackedWidget.view
-# 上游 PopUpAniStackedWidget 切页要跑 300ms 的整页 pos 动画（deltaY=76），
-# 整页每帧重绘一次 —— 主页/设置页单帧 11-12ms，肉眼就是卡
+stacked = window.stackedWidget
+
+
+def wait_page_slide(timeout: float = 2.0) -> bool:
+    """等切页动画跑完。属性动画不推进时钟，只能按真实时间轮询。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if window._slide_overlay is None:
+            break
+        settle(2)
+        time.sleep(0.01)
+    settle(2)
+    return window._slide_overlay is None
+
+
+def overlay_of():
+    return stacked.findChild(QLabel, "pageSlideOverlay")
+
+
 for page in (window.emojiPage, window.settingPage, window.homePage):
     window.switchTo(page)
-    app.processEvents()  # 只给一轮：动画版这时候页还停在 +76px 上
+    app.processEvents()  # 只给一轮：动画版这时候快照还在飞
     check(
-        view.currentWidget() is page and page.y() == 0,
-        f"切到 {page.objectName()} 一轮事件循环内就到位（y={page.y()}）",
+        view.currentWidget() is page,
+        f"切到 {page.objectName()} 一轮事件循环内 currentWidget 就对了（不等动画）",
     )
+    overlay = window._slide_overlay
+    check(overlay is not None, f"切到 {page.objectName()} 起了滑入动画")
+    if overlay is not None:
+        check(
+            overlay.pixmap().size() == view.size(),
+            f"快照尺寸等于内容区（{overlay.pixmap().size()} vs {view.size()}）",
+        )
+        check(
+            overlay.parent() is stacked,
+            "快照挂在 stackedWidget 上 —— 挂 view 会被 QStackedLayout 当成新的一页",
+        )
+        check(
+            overlay.isVisible(),
+            "快照真的显示出来了 —— 窗口显示后再 new 的子控件不会自动显示，"
+            "漏 show() 动画照样跑但全程看不见",
+        )
+        check(
+            overlay.x() == view.x() and overlay.y() >= view.y(),
+            f"快照在同一列、从下方往上滑（{overlay.pos()} → {view.pos()}）",
+        )
+        check(page.isHidden(), f"动画期间真页面藏着不重绘（{page.objectName()}）")
+    check(wait_page_slide(), f"切到 {page.objectName()} 的动画能跑完")
     check(
-        view._ani is None or view._ani.state() != QAbstractAnimation.State.Running,
-        f"切到 {page.objectName()} 没有残留的位移动画",
+        not page.isHidden() and page.y() == 0 and view.currentWidget() is page,
+        f"结束后真页面放回原位（y={page.y()}）",
     )
+    check(overlay_of() is None, "结束后快照控件已删除，没有残留")
+
+# 动画中途再切一次：按最后一次算，且不能留下两份快照
+window.switchTo(window.emojiPage)
+app.processEvents()
+window.switchTo(window.dressPage)
+check(view.currentWidget() is window.dressPage, "中途再切一次按最后一次算")
+check(wait_page_slide(), "被打断的动画能正常收尾")
+check(
+    not window.dressPage.isHidden() and window.dressPage.y() == 0,
+    "打断后目标页在终点且可见",
+)
+check(window.emojiPage.isHidden(), "被打断的那一页不会被留在可见态")
+check(overlay_of() is None, "打断路径没有残留两份快照")
+
 # 标题栏返回按钮走 qrouter.pop() → stacked.setCurrentWidget，不经 switchTo
 check(
     window.stackedWidget.setCurrentWidget == window._set_current_interface,
     "stackedWidget.setCurrentWidget 也被换掉了（覆盖返回按钮那条路径）",
 )
 window.stackedWidget.setCurrentWidget(window.downloadPage)
-app.processEvents()
-check(
-    view.currentWidget() is window.downloadPage and window.downloadPage.y() == 0,
-    "经 setCurrentWidget 切页同样即时到位",
-)
+check(view.currentWidget() is window.downloadPage, "经 setCurrentWidget 切页走同一条路")
+check(wait_page_slide(), "经 setCurrentWidget 的动画同样能跑完")
 
 print("== 6. 无窗口时的降级 ==")
 orphan = QWidget()

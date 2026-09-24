@@ -7,6 +7,8 @@ qfluentwidgets 只给其组件套 QSS、不改全局 palette，本项目大量�
 """
 from __future__ import annotations
 
+from functools import cache
+
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 from qfluentwidgets import ThemeColor, isDarkTheme, qconfig
@@ -43,6 +45,49 @@ def bind_theme(widget, fn) -> None:
     """
     fn()
     qconfig.themeChangedFinished.connect(fn)
+
+
+# QSS 文本缓存（`functools.lru_cache` 包装后的「路径 → qss」函数），
+# 断言脚本读它的 `cache_info()` 来证明「读文件次数不随控件数增长」
+_qss_content_cache = None
+
+
+def _patch_qss_content_cache() -> None:
+    """按 QSS 路径缓存文件内容——主题切换的性能大头之一。
+
+    上游 `updateStyleSheet()` 对每个注册控件调一次 `getStyleSheet(source, theme)`，
+    里面是 `StyleSheetBase.content()` → `getStyleSheetFromFile(path)`：**每个控件都重开一次
+    QFile、重读一遍 qss 资源**，之后还要再过一遍 `font.py` 的字体替换正则。实测空应用
+    238 个注册控件就是 238 次白读，表情包网格塞满卡时 1738 次。
+
+    路径本身已经带主题（`FluentStyleSheet.path()` = `:/qfluentwidgets/qss/<theme>/<名字>.qss`），
+    qss 内容在运行期也不会变，所以按路径缓存不会串主题。
+
+    挂在 `StyleSheetBase.content` 而不是 `getStyleSheetFromFile` 上：`font.py` 的字体补丁
+    靠 `__wrapped__` 判幂等，抢先套一层 `lru_cache` 会让它以为自己已经打过而静默跳过。
+    `CustomStyleSheet` / `StyleSheetCompose` 各自覆写了 `content`，不受影响。
+    """
+    global _qss_content_cache
+    from qfluentwidgets.common import style_sheet as qss_mod
+
+    original = qss_mod.StyleSheetBase.content
+    if getattr(original, "_qss_cached", False):  # 幂等：别套第二层
+        return
+
+    @cache
+    def content_for(path: str) -> str:
+        # 现取模块属性：字体补丁可能在本补丁之后才打上
+        return qss_mod.getStyleSheetFromFile(path)
+
+    def cached_content(self, theme=qss_mod.Theme.AUTO) -> str:
+        return content_for(self.path(theme))
+
+    cached_content._qss_cached = True  # 不能叫 __wrapped__，见 docstring
+    qss_mod.StyleSheetBase.content = cached_content
+    _qss_content_cache = content_for
+
+
+_patch_qss_content_cache()
 
 
 def _dark_palette() -> QPalette:

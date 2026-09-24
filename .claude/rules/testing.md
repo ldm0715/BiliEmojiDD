@@ -63,19 +63,25 @@ for s in scripts/check_*.py; do printf "%-40s" "$s"; \
 - **真机帧率必须人工跑**（离屏只能做相对的 A/B，量不出 DWM 合成、vblank 与真实调度下的绝对帧率）。
 - 命令前两句固定：`cd /f/My_Project/biliEmojiDD`、`export PYTHONIOENCODING=utf-8`；
   PowerShell 换成 `$env:PYTHONIOENCODING="utf-8"`。
-- 四档命令：`--mode idle --page emoji --fake 300 --seconds 6 --warmup 6 --no-net`、
+- 五档命令：`--mode idle --page emoji --fake 300 --seconds 6 --warmup 6 --no-net`、
   `--mode scroll --page emoji --fake 300 --seconds 10 --warmup 6 --no-net`、
-  `--mode switch --seconds 10 --warmup 6 --no-net`、`--mode resize --seconds 8 --warmup 6 --no-net`；
+  `--mode switch --rate 0.4 --seconds 10 --warmup 6 --no-net`、
+  `--mode theme --rate 1.0 --seconds 10 --warmup 6 --no-net`、
+  `--mode resize --seconds 8 --warmup 6 --no-net`；
   等图窗口期加 `--thumb-delay 800 --seconds 8 --warmup 2` 并与 `--legacy` 同参数对比；
   真实状态 `--mode scroll --seconds 12 --warmup 3`（接受不可复现）。
+- `--mode switch` 默认 `--rate 0.2` 会把 300ms 的切页动画一路打断，比真人操作密得多，
+  量动画就加 `--rate 0.4`；`--mode theme` 每 tick 切一次主题，建议 `--rate 1.0`，
+  看的是「最长停顿」那一笔（切主题是同步卡主线程，不是掉帧那么温和）。
 - 五个硬要求：**不要带 `QT_QPA_PLATFORM=offscreen`**；窗口别最小化、别被其他窗口盖住；
   配 `--fake 300` 时 `--warmup` ≥ 5 s；**必须加 `--no-net`**；`--fake 300` 是为可复现
   （不加 `--fake` 时因隔离 `APPDATA` 读不到 Cookie，真实卡片会是 0 张）。
 - 看这几行：`实到帧率`、`帧间隔 / 反推帧率`（与实到互相对照，差很多说明有停顿）、
   `单帧重绘耗时`（p99 决定主观卡不卡）、`绘制占用`。
 - 判据（按 200 Hz 屏 + 125% 缩放）：idle **重绘 0 次**；scroll `--fake 300` 反推帧率 **≈60**、
-  单帧重绘中位 **≤ 8 ms**、p99 **≤ 16 ms**；switch 全程无 **> 100 ms** 停顿；
-  resize 单次宽度变化 **≤ 60 ms**。
+  单帧重绘中位 **≤ 8 ms**、p99 **≤ 16 ms**；switch 看**单帧重绘耗时**（滑快照 1~3 ms，
+  改前移动真页面是 5~18 ms）——它的「最长停顿」会把两次切换之间的空闲算进去，别当卡顿；
+  theme 看「最长停顿」那一笔；resize 单次宽度变化 **≤ 60 ms**。
 - **`--mode scroll` 上限由设置项「滚动帧率」决定**：上游 `SmoothScroll` 定时器周期
   `int(1000 / fps)`，默认 60 ⇒ 16 ms ⇒ 封顶 60，所以默认档下稳态 59 fps **就是达标**；
   想超过 60 要调到 120（即时生效，不用重启）。

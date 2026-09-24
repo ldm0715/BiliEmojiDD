@@ -144,34 +144,46 @@ os.environ["QT_QPA_PLATFORM"] = "windows:fontengine=freetype"
 
 ---
 
-## 四、切页不做位移动画
+## 四、切页动画滑的是快照
 
-上游 `PopUpAniStackedWidget.setCurrentIndex` 每次切页跑 **300 ms 的整页 `pos`
-动画**（`deltaY=76`），这 300 ms 里整页被重绘十几帧。实测单帧重绘成本
+上游 `PopUpAniStackedWidget.setCurrentIndex` 是**移动真页面**（300 ms 的整页 `pos`
+动画，`deltaY=76`），这 300 ms 里整页每帧重绘一次。实测单帧重绘成本
 （`page.grab()`，1100x760）：
 
 | 页面 | 单帧 |
 |---|---|
-| 主页 | 12.2 ms |
-| 设置 | 11.3 ms |
-| 表情包 | 5.1 ms |
-| 收藏集 | 3.7 ms |
-| 下载 | 2.6 ms |
+| 主页 | 17.8 ms |
+| 设置 | 12.7 ms |
+| 表情包 | 9.2 ms |
+| 收藏集 | 4.9 ms |
+| 下载 | 4.5 ms |
 
-主页 / 设置页 ≈ 25 fps 的滑动，肉眼就是卡。页面内容本身够重（滚动区 + 几十张卡片），
-为一次导航付这个代价不值。
+主页 / 设置页已经超过 60 Hz 的 16.7 ms 预算，滑动时肉眼就是卡——所以当初把动画整个
+关掉了，但那样切页又显得割裂。现在改成**滑一张快照**：贴一张等大的位图只要 **0.47 ms**，
+差 40 倍。
 
-`MainWindow._set_current_interface()` 跳过动画，直接
-`QStackedWidget.setCurrentIndex(view, index)`。两个细节：
+`MainWindow._set_current_interface()` 的顺序：
 
+1. 目标就是当前页 → 直接返回；
+2. 上一次动画还在飞 → `_finish_slide()` 收尾（删快照、把上一页 `show()` 回来）；
+3. `QStackedWidget.setCurrentIndex(view, index)` —— **状态立即生效**，侧栏高亮 /
+   `currentWidget()` / `qrouter` 都不等动画跑完；
+4. `interface.grab()` 抓快照（一次 5–18 ms）；
+5. 快照挂成 `stackedWidget` 的 `QLabel`，`interface.hide()`，位图从 `+76px` 滑到原位；
+6. `finished` → 删快照、`interface.show()`（内容与快照一致，看不出接缝）。
+
+三个坑：
+
+- **快照必须挂 `stackedWidget`，不能挂 `view`**——`view` 是 `QStackedWidget`，
+  直接给它加子控件会被 `QStackedLayout` 当成新的一页（`notify.py` 的 InfoBar 同理）。
+- **收尾要 `setParent(None)` + `deleteLater()`**：`processEvents()` 不派发
+  DeferredDelete，光 `deleteLater()` 会让快照一直挂在 `stackedWidget` 上。
 - **换的是 `stackedWidget` 实例上的 `setCurrentWidget` 方法**，不只是覆写
   `switchTo`——切页有三个入口：侧栏点击（`onClick` → `switchTo`）、程序化
   `switchTo`、标题栏返回按钮（`qrouter.pop()` 直接调 `stacked.setCurrentWidget`）。
   换实例方法一次盖全。
-- 切之前若有动画在跑要 `stop()`，切完 `interface.move(x, 0)` 把页放回原位——
-  动画中途被打断时页可能停在 +76px 上。
 
-切完实测：一轮事件循环内到位，整次切页 6–45 ms（含一次完整布局 + 重绘）。
+`_SLIDE_DURATION = 300` / `_SLIDE_DELTA = 76`（照上游）；想更干脆把时长压到 150 左右。
 
 ### 已知未优化
 
@@ -180,11 +192,54 @@ os.environ["QT_QPA_PLATFORM"] = "windows:fontengine=freetype"
 `addItem` + `setItemWidget`（1.2 s，其中 `TableItemDelegate.updateEditorGeometry`
 是 **O(n²)**：300 项触发 45150 次）。表情包页有分页（`_PAGE_SIZE = 20`，
 约 180 ms/页）所以还能忍，收藏集搜索 30 条约 280 ms。真要优化得动卡片结构
-（少建组件库控件 / 复用卡片），本次未做。
+（少建组件库控件 / 复用卡片），本次未做。它同时也是主题切换的大头（卡片上的每个
+子控件都注册了 QSS），见下一节。
 
 ---
 
-## 五、开屏面板（启动前几秒不再是黑屏）
+## 五、主题切换为什么还是会卡
+
+`setTheme()` 走 `updateStyleSheet()`，对**每个注册控件**调一次 `setStyleSheet`，
+而 Qt 设非空 QSS 时会递归 repolish 整棵子树（实测：设成 `"x"` 也一样贵，设成 `""` 是
+0 ms）。空应用 238 个注册控件要 350 ms；表情包网格塞 300 张卡时 1738 个控件要 1.94 s。
+
+两处能改，都已落地：
+
+- **QSS 文本按路径缓存**（`app/common/theme.py::_patch_qss_content_cache`）：上游
+  对每个控件重读一遍 qss 资源（QFile 打开 + 解码 + 字体正则），实测 739 个控件的
+  全量切换只读了 17 次文件。挂在 `StyleSheetBase.content` 上，幂等标记**不能叫
+  `__wrapped__`**——`font.py` 的字体补丁靠它判幂等，抢先挂上会让字体补丁静默失效。
+- **交互式切换用 `lazy=True`**（上游自带）：`visibleRegion()` 为空的控件只标
+  `dirty-qss`，交给 `DirtyStyleSheetWatcher` 在它下次绘制时补刷。空应用 350 → 125 ms、
+  739 个注册控件 827 → 424 ms。代价是「切完主题第一次进某个页面 / 滚到新卡片」时
+  多付一次补刷，换掉的是切主题那一刻的整段卡顿。
+
+**快照不能用 `page.grab()`（踩过）**：`QWidget.grab()` 会拿控件自己的 `palette().window()`
+铺底，而 QSS 接管过的子树里 palette 是缓存值——`app.setPalette()` 进不去（见 `theme.py`），
+页面 palette 一直停在浅色的 `#efefef`。于是亮色切暗色之后，**整张快照还是浅灰**，动画放完
+真页面才变黑，观感就是「切页先白一下再变黑」。跟 QSS 有没有刷干净无关：实测亮色、暗色两档
+抓出来都是同样的 `#efefef`（亮度 239）。
+
+现在自己开画布（`MainWindow._page_snapshot`）：底色取 `stackedWidget` 自己那层
+（`DrawWindowBackground` 只画它自己、不画子控件，透明度也保留，叠在真背景上就与实时渲染一致），
+页面内容再用 `DrawChildren` 叠上去。实测叠在窗口底色上的亮度：亮色 251 / 暗色 46。
+注意 PySide6 的 `RenderFlag` 只导出 `DrawChildren` / `DrawWindowBackground` / `IgnoreMask`，
+C++ 里的 `DrawWidget` 没有。
+
+顺带一个结论：**不需要**在抓快照前额外整页补刷被 lazy 推迟的控件——`render()` 本身就是走
+Paint 事件的渲染路径，上游 `DirtyStyleSheetWatcher` 会把画到的那批补上（`check_theme_switch.py`
+4.4 断言「渲染快照时脏控件数下降」）。补一页要 5~136 ms，是白花的开销。
+
+剩下的大头去不掉：`StackedWidget`（子树三千）与 `PackageGrid`（子树两千）这两个容器
+本身可见，Qt 递归时**不看**子孙的 visibleRegion，一次 `setStyleSheet` 就是 500 / 430 ms。
+试过三条绕法都不成：临时 `setParent(None)` 更慢（`setParent` 自己 1066 ms）、QSS 只向下
+传播挂不上代理、退注册改用 palette 出背景既是绕过主题机制又会丢圆角描边。
+所以「一屏几百张卡」时切换仍有几百 ms —— 表情包页有分页（每页 20 张），这也是它
+一直被留着的原因。
+
+---
+
+## 六、开屏面板（启动前几秒不再是黑屏）
 
 ### 为什么要有
 

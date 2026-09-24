@@ -71,6 +71,26 @@
 - 主题保存顺序必须「**先 `setTheme` 再 `qconfig.set(cfg.theme, ...)`**」；`config.py` 加载后要
   `qconfig.set(qconfig.themeMode, cfg.theme.value, save=False)` 强制同步，
   否则 config.json 里 `QFluentWidgets.ThemeMode` 残留会导致反色。
+- **快照不能用 `QWidget.grab()`，走 `MainWindow._page_snapshot()`**：`grab()` 会拿控件自己的
+  `palette().window()` 铺底，而 QSS 接管过的子树里 palette 是缓存值（`app.setPalette()` 进不去，
+  见 `theme.py`）——亮色切暗色后页面 palette 还停在 `#efefef`，整张快照就是浅灰、动画放完真页面
+  才变黑，即「切页先白一下再变黑」。现在自己开画布：底色取 `stackedWidget` 自己那层
+  （`DrawWindowBackground` 只画它自己、不画子控件，透明度也保留，叠在真背景上就与实时渲染一致），
+  页面内容再用 `DrawChildren` 叠上去。`check_theme_switch.py` 的 4.5 断言了亮/暗两档的底色亮度。
+  **PySide6 的 `RenderFlag` 只有 `DrawChildren` / `DrawWindowBackground` / `IgnoreMask`**
+  （C++ 里的 `DrawWidget` 没导出）。
+- 快照渲染会顺带把 lazy 推迟的控件补上（`render()` 走 Paint 事件，上游 watcher 会刷它画到的那批），
+  所以**不需要**额外整页补刷——补一页要 5~136ms，是白花（踩过：为这个加过一轮无用的 flush）。
+- **用户触发的主题切换一律 `setTheme(theme, lazy=True)`**（`MainWindow._toggle_theme` /
+  `SettingPage._on_theme_changed`）：没在画的控件改由上游 `DirtyStyleSheetWatcher` 在它下次
+  绘制时补刷，空应用 350ms → 125ms、739 个注册控件 827ms → 424ms。新增第三个切换入口时
+  别忘了这个参数，否则当场全量重刷、卡住主线程。
+- **QSS 文本按路径缓存**（`theme.py::_patch_qss_content_cache`，import 期安装）：上游对每个注册
+  控件都要重读一遍 qss 资源。补丁挂在 `StyleSheetBase.content` 上，**幂等标记不能叫
+  `__wrapped__`**——`font.py` 的字体补丁靠 `__wrapped__` 判幂等，抢先挂上会让字体补丁静默失效。
+- 天花板：`StackedWidget` / `PackageGrid` 这两个巨型容器的递归 repolish 去不掉（Qt 设非空 QSS
+  必递归整棵子树，lazy 也拦不住），所以「一屏几百张卡」时切换仍有几百 ms。别为这个去退注册
+  容器、用 palette 顶 QSS——那是绕过主题机制，还会丢圆角描边。
 - 取色直接用 `isDarkTheme()`（AUTO 已被 qconfig 解析成具体值）。
 - 测试脚本里 `setTheme` 必须在 `import app.*` 之后调用；禁止把 `setTheme` 与断言 `cfg.theme` 混用
   （`cfg.theme` 由 `_on_theme_changed` / `_toggle_theme` 写）。
@@ -319,9 +339,16 @@
 - **禁止用上游 `SplashScreen`**（必须挂在已存在的 `FluentWindow` 上，且只有居中图标 + TitleBar）。
 - 消息提示一律经 `app/common/notify.py` 的 `_resolve_parent()` 归一：挂到
   `widget.window().stackedWidget` 上并 `bar.raise_()`；调用点仍传自己的页面 widget。
-- **切页必须跳过 `PopUpAniStackedWidget` 的 300ms 位移动画**，改为替换 `stackedWidget` 实例上的
-  `setCurrentWidget` 方法（一次盖全侧栏点击 / 程序化 `switchTo` / 标题栏返回三个入口）；
-  切前有动画在跑要 `stop()`，切完 `interface.move(x, 0)`。
+- **切页动画滑的是快照，不是真页面**：入口仍是替换 `stackedWidget` 实例上的 `setCurrentWidget`
+  （一次盖全侧栏点击 / 程序化 `switchTo` / 标题栏返回三个入口），但 `_start_slide` 会把目标页
+  `grab()` 成一张位图、把真页面 `hide()` 掉，再让位图从 `+_SLIDE_DELTA` 滑到原位。
+  上游那种「移动真页面」每帧重绘整页（实测主页 17.8ms / 设置页 12.7ms，60Hz 预算只有 16.7ms），
+  贴一张等大位图只要 0.47ms——**别改回 `PopUpAniStackedWidget.setCurrentIndex`**。
+  四个细节：`QStackedWidget.setCurrentIndex` 先调（状态即时生效，侧栏高亮/qrouter 不等动画）；
+  快照必须挂 `stackedWidget` 而不是 `view`（`view` 是 QStackedWidget，加子控件会被当成新页）；
+  **`overlay.show()` 不能省**——窗口已显示之后再 new 的子控件 Qt 不会自动显示，漏了这句动画照样跑、
+  只是那张图全程没画出来（踩过，屏幕外断言必须查 `overlay.isVisible()`）；
+  收尾要 `setParent(None)` + `deleteLater()`（`processEvents()` 不派发 DeferredDelete）。
 - 侧栏展开宽度 `navigationInterface.setExpandWidth(150)`（库默认 322）。
 - 表情包页 Pivot 顺序「全部表情包 → 按 ID 查询 →（直播间）」，默认停在 index 0
   （`setCurrentItem` 不触发 `onClick`，`onClick` 也不移动指示条，初始化两句都要写）。

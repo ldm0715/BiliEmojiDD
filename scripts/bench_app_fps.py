@@ -10,9 +10,10 @@
     uv run python scripts/bench_app_fps.py --mode scroll --page emoji --fake 300
     uv run python scripts/bench_app_fps.py --mode switch --seconds 8
     uv run python scripts/bench_app_fps.py --mode resize --seconds 8
+    uv run python scripts/bench_app_fps.py --mode theme  --seconds 8
 
 参数：
-  --mode     idle | scroll | switch | resize          （默认 scroll）
+  --mode     idle | scroll | switch | resize | theme   （默认 scroll）
   --page     home | emoji | dress | download | setting（默认 emoji）
   --seconds  测量时长                                  （默认 8）
   --rate     交互间隔秒数（默认 0.2 = 每秒 5 次，接近真人连续滚动）。
@@ -90,7 +91,7 @@ def build_app():
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="真机帧率测量")
     parser.add_argument("--mode", default="scroll",
-                        choices=["idle", "scroll", "switch", "resize"])
+                        choices=["idle", "scroll", "switch", "resize", "theme"])
     parser.add_argument("--page", default="emoji",
                         choices=["home", "emoji", "dress", "download", "setting"])
     parser.add_argument("--seconds", type=float, default=8.0)
@@ -356,6 +357,14 @@ def make_driver(args, app, window, grid):
             window.switchTo(order[state[0]])
 
         return switch
+
+    if args.mode == "theme":
+        # 切主题是同步动作：一次切换会先在主线程里卡住一段（就是「掉帧」的来源），
+        # 报告里看「最长停顿」那一笔。`--rate` 建议 ≥1 s，否则每次都撞上未完成的补刷
+        def theme(_elapsed: float) -> None:
+            window._toggle_theme()
+
+        return theme
 
     widths = [1100, 980, 1180, 900, 1120]
     state = [0]
