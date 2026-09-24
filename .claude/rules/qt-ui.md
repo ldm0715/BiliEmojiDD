@@ -260,9 +260,13 @@
   `all_packages()` 列表不含 emote，只有 `label_text` 可用。
 - 播放唯一路径是 `image_cache.get(url) → QByteArray → QBuffer → QMovie`（`movie_from_cache`），
   不改线程层、不再发网络请求；字节拿不到一律返回 `None` 静默不播。
-- 表情详情网格只播鼠标底下那一张：`EmojiCard.enterEvent` 起 movie、`leaveEvent` 停并退回静态图。
-  `leaveEvent` 必须加 `rect().contains(mapFromGlobal(QCursor.pos()))` 判据，
-  否则鼠标移到子控件上会「一进去就停」。`hideEvent` 与 `set_cell` 里也要停一次。
+- 表情详情网格只播鼠标底下那一张：`enterEvent` 起 movie、`leaveEvent` 停并退回静态图，命中判据
+  只有 `_hovered()` 一份（卡片可见 + 光标在卡片矩形内 + 命中点在视口里；鼠标移到子控件时父控件
+  也会收到 `leaveEvent`，不判会「一进去就停」）。
+- **悬浮状态不能只靠 enter / leave 驱动**：查看大图的遮罩盖住父窗口期间 Qt 不发也不补发
+  enter / leave，只信事件的话 movie 会一直转下去；`_on_frame` 每帧复核光标位置自愈（最多多放
+  一帧），卡片被滚出视口同理。停播要**先清 `_pixmap_memo` 再退静态图**，否则停在动图最后一帧。
+  `hideEvent` 与 `set_cell` 里也要停一次。
 - 图片查看器打开即播：自己驱一个 movie，每帧 `_letterbox(movie.currentPixmap(), ...)` 合成后
   `setItemImage` 顶回去；三个触发点缺一不可——构造末尾、翻页、`_on_thumb`。
   只播当前项，翻页先停旧的再起新的；`_stop_movie()` 退回静态首帧；

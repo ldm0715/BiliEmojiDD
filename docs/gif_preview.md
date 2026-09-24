@@ -89,11 +89,20 @@ device，之后 `frameCount()` 直接段错误（不是异常，是进程没了�
 `EmojiCard.enterEvent` 起 movie、`leaveEvent` 停并退回静态图。只播鼠标底下那一张 ——
 一屏几十个动图同时解码没有意义。
 
-`leaveEvent` **必须加 `rect().contains(mapFromGlobal(QCursor.pos()))` 判据**：鼠标移到子控件上时
-父控件也会收到 `leaveEvent`，不判会「一进去就停」（历史胶囊的 × 踩过同一个坑）。
+命中判据收敛在 `EmojiCard._hovered()`（`leaveEvent` 与每帧复核共用一份）：
+
+- 卡片可见、光标落在卡片矩形内、且命中点还在视口里。鼠标移到子控件上时父控件也会收到
+  `leaveEvent`，不判会「一进去就停」（历史胶囊的 × 踩过同一个坑）。
+- **不能只靠 `leaveEvent`**：查看大图的遮罩（`MaskDialogBase`）盖住父窗口期间 Qt 不给宿主
+  窗口发 enter / leave，遮罩关掉之后也不补发 —— 只信事件的话 movie 会一直转下去，直到用户
+  重新悬停再移开。所以 `_on_frame` 每帧用真实光标位置复核一次，事件丢了也能自己停（最多多
+  放一帧）。卡片被滚出视口时同理：它的 rect 跟着移出视口，光标早就不在卡上。
 
 `hideEvent` 与 `set_cell` 里也停一次：卡片滚出视口、单元格尺寸变化后，movie 的 `scaledSize`
 已经过期，停掉等下次悬浮重来。
+
+停播时要**先丢掉缩放 memo（`_pixmap_memo = None`）再退静态图**：`_rescale` 命中 memo 会直接
+返回 None、不设 pixmap，卡片就停在动图最后一帧上，看着像没退回去。
 
 ### 图片查看器：打开即播
 

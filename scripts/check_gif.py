@@ -3,7 +3,9 @@
 覆盖四块：
 1. `movie_from_cache` / `package_has_gif` 两个判定入口；
 2. `PackageCard` 的 GIF 徽标在图片区**左下角**，且与勾选框 / 「已下载」徽标互不重叠；
-3. `EmojiCard` 悬浮播放：进入起 movie、离开停 movie 并退回静态图；
+3. `EmojiCard` 悬浮播放：进入起 movie、离开停 movie 并退回静态图；leave 事件
+   丢失（查看大图的遮罩盖住父窗口时 Qt 不发）与卡片从光标底下移开时，靠每帧
+   复核光标位置自己停下来；
 4. `ImageViewer` 打开即播，翻到非动图项后旧 movie 已停。
 
 运行：QT_QPA_PLATFORM=offscreen PYTHONIOENCODING=utf-8 uv run python scripts/check_gif.py
@@ -20,10 +22,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # 要写 image_cache：必须在 import app.* 之前隔离 APPDATA，别弄脏用户真实缓存
 os.environ["APPDATA"] = tempfile.mkdtemp(prefix="bilidd_gif_")
 
-from PySide6.QtCore import QEvent, QPointF, QSize
+from PySide6.QtCore import QPoint, QPointF, QSize
 from PySide6.QtGui import QColor, QEnterEvent, QMovie, QPixmap, QPixmapCache
 from PySide6.QtWidgets import QApplication, QWidget
 
+from app.components import widgets as widgets_mod
 from app.components.disk_cache import image_cache
 from app.components.gif import movie_from_cache, package_has_gif
 from app.components.image_viewer import ImageViewer
@@ -34,8 +37,14 @@ _ONE_FRAME = base64.b64decode(
     "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
 )
 _FRAME_START = _ONE_FRAME.index(b"\x21\xf9")  # 图形控制扩展的起点
+# 循环扩展：没有它 QMovie 放完一遍就 NotRunning，`_on_frame` 的复核再也跑不到，
+# 断言就量不到「事件丢了会不会自愈」
+_LOOP_EXT = b"\x21\xFF\x0B" + b"NETSCAPE2.0" + b"\x03\x01\x00\x00\x00"
 _GIF_BYTES = (
-    _ONE_FRAME[:-1] + _ONE_FRAME[_FRAME_START:-1] + b"\x3b"  # 去掉 trailer 再补回
+    _ONE_FRAME[:_FRAME_START]  # 文件头 + 逻辑屏幕描述符 + 全局色表
+    + _LOOP_EXT
+    + _ONE_FRAME[_FRAME_START:-1] * 2  # 同一帧放两遍（各自去掉 trailer）
+    + b"\x3b"
 )
 # 1x1 PNG：用来验证「单帧图不会被当成动图」
 _PNG_BYTES = base64.b64decode(
@@ -60,6 +69,14 @@ def _hover_in(widget) -> None:
     """QWidget.enterEvent 只吃 QEnterEvent（不是裸 QEvent），坐标随便给。"""
     pos = QPointF(1, 1)
     widget.enterEvent(QEnterEvent(pos, pos, pos))
+
+
+def pump(seconds: float = 0.3) -> None:
+    """放几帧：QMovie 的帧定时器要真实时间过去才会响。"""
+    end = time.time() + seconds
+    while time.time() < end:
+        QApplication.instance().processEvents()
+        time.sleep(0.01)
 
 
 class FakeMeta:
@@ -191,6 +208,14 @@ def main() -> int:
     )
 
     gif_card.set_pixmap(QPixmap(64, 64))
+    static_img = gif_card.iconLabel.pixmap().toImage()
+
+    # offscreen 平台下 `QCursor.pos()` 恒为 (0, 0)，模拟不出「光标在卡上」，
+    # 把取光标那个口换成可控值（生产代码走的就是 `QCursor.pos()`）
+    real_cursor_pos = widgets_mod._cursor_pos
+    on_card = gif_card.mapToGlobal(gif_card.rect().center())
+    widgets_mod._cursor_pos = lambda: on_card
+
     _hover_in(gif_card)
     check("悬浮起 movie", gif_card._movie is not None)
     check(
@@ -198,15 +223,36 @@ def main() -> int:
         gif_card._movie is not None
         and gif_card._movie.state() == QMovie.MovieState.Running,
     )
+    pump()
+    check(
+        "光标在卡上时复核不误停",
+        gif_card._movie is not None
+        and gif_card._movie.state() == QMovie.MovieState.Running,
+    )
     _hover_in(still_card)
     check("静图卡不起 movie", still_card._movie is None)
 
-    # 让鼠标"确实在卡外"：leaveEvent 里有 rect().contains(mapFromGlobal(cursor)) 判据。
-    # 离屏下光标停在 (0,0)，卡片被 grid 摆到非原点位置即可满足
+    # 回归：查看大图的遮罩盖住父窗口时 Qt 不给宿主窗口发 leave（关掉后也不补发），
+    # 只信事件的话动图会一直转下去 —— 所以每帧用真实光标位置复核一次。
+    # 这里只挪光标、不发任何 leaveEvent
+    widgets_mod._cursor_pos = lambda: QPoint(-9999, -9999)
+    pump()
+    check("leave 丢失也能自己停", gif_card._movie is None)
+    check(
+        "退回静态缩略图（不是动图最后一帧）",
+        gif_card.iconLabel.pixmap().toImage() == static_img,
+    )
+
+    # 卡片从光标底下移开（同等价于滚出视口）：光标没动，也不会有 leave
+    widgets_mod._cursor_pos = lambda: on_card
+    _hover_in(gif_card)
+    pump()
+    check("再次悬浮重新起 movie", gif_card._movie is not None)
     gif_card.move(200, 120)
-    gif_card.leaveEvent(QEvent(QEvent.Type.Leave))
-    check("离开停 movie", gif_card._movie is None)
-    check("退回静态图", not gif_card.iconLabel.pixmap().isNull())
+    pump()
+    check("卡片移开后停 movie", gif_card._movie is None)
+
+    widgets_mod._cursor_pos = real_cursor_pos
 
     # 兼容旧的两元组调用
     grid.set_emotes([("旧调用", PNG_URL)])

@@ -58,6 +58,12 @@ _SPINNER_SIZE = 28  # 缩略图加载环直径
 _RETRY_SIZE = 28  # 加载失败后的重试按钮直径
 
 
+def _cursor_pos() -> QPoint:
+    """光标全局坐标。单独成函数是给屏幕外断言留的替身口：offscreen 平台下
+    `QCursor.pos()` 恒为 (0, 0)，模拟不出「光标已经移开」。"""
+    return QCursor.pos()
+
+
 def _make_gif_badge(parent: QWidget):
     """「GIF」小角标：钉在图片区左下角，尽量小、不压住图。
 
@@ -430,8 +436,26 @@ class EmojiCard(_GifBadgeMixin, _SpinnerMixin, QWidget):
     def leaveEvent(self, event) -> None:
         super().leaveEvent(event)
         # 鼠标移到子控件上时父控件也会收到 leaveEvent，得确认真的离开了整张卡
-        if not self.rect().contains(self.mapFromGlobal(QCursor.pos())):
+        if not self._hovered():
             self._stop_movie()
+
+    def _hovered(self) -> bool:
+        """光标此刻是否真的悬在这张卡上。
+
+        不能只靠 leaveEvent：Qt 在弹层（查看大图的遮罩）盖住父窗口期间不给宿主
+        窗口发 enter / leave，弹层关掉之后也不补发 —— 那时只信事件的话 movie 会
+        一直转下去，直到用户重新悬停再移开。命中点还得落在视口里：卡片被滚出
+        视口时它的 rect 跟着移出视口，光标早已不在卡上。
+        """
+        if not self.isVisible():
+            return False
+        pos = self.mapFromGlobal(_cursor_pos())
+        if not self.rect().contains(pos):
+            return False
+        view = self.parentWidget()
+        if view is None:
+            return True
+        return view.rect().contains(self.mapTo(view, pos))
 
     def hideEvent(self, event) -> None:
         super().hideEvent(event)
@@ -457,8 +481,14 @@ class EmojiCard(_GifBadgeMixin, _SpinnerMixin, QWidget):
         return frame.scaled(box, Qt.AspectRatioMode.KeepAspectRatio)
 
     def _on_frame(self) -> None:
-        if self._movie is not None:
-            self.iconLabel.setPixmap(self._movie.currentPixmap())
+        movie = self._movie
+        if movie is None:
+            return
+        # 每帧复核一次：leave 丢了也能自己停下来，最多多放一帧
+        if not self._hovered():
+            self._stop_movie()
+            return
+        self.iconLabel.setPixmap(movie.currentPixmap())
 
     def _stop_movie(self) -> None:
         movie = self._movie
@@ -467,6 +497,9 @@ class EmojiCard(_GifBadgeMixin, _SpinnerMixin, QWidget):
         self._movie = None
         movie.stop()
         movie.deleteLater()
+        # 丢掉缩放 memo 再退静态图：`_rescale` 命中 memo 会直接返回 None、不设 pixmap，
+        # 卡片就停在动图最后一帧上，看着像没退回去
+        self._pixmap_memo = None
         self._apply_static()
 
     def mousePressEvent(self, event) -> None:

@@ -46,9 +46,11 @@ for s in scripts/check_*.py; do printf "%-40s" "$s"; \
 - **涉及后台任务必须轮询等任务完成再退出**（否则看到 `Internal C++ object already deleted`
   假象；真实 app 里 `app.exec()` 常驻无此问题）；屏幕外脚本里的 `run_task` 桩同理必须回调
   `on_finished`。
-- **等属性动画要等真实时间**（`processEvents()` 不推进时钟）：用
+- **等属性动画 / `QMovie` 帧都要等真实时间**（`processEvents()` 不推进时钟）：用
   `wait_until(cond, timeout)` = `processEvents()` + `time.sleep(0.01)` 轮询，
   并轮询 `QPropertyAnimation.state() != Running`；只等「高度 > 0」会量到中间帧。
+  量悬停播放还要：offscreen 下 `QCursor.pos()` 恒为 (0, 0)，替掉 `widgets._cursor_pos` 才能模拟
+  光标位置；自制测试 GIF 要带 Netscape 循环扩展，否则放完一遍就 `NotRunning`。
 - **隐藏的 Tab 不参与布局，几何断言前先切到该页**，并加 `page.width() == 600` 这类自检——
   `QStackedWidget` 里非当前 / 未 `show()` 的 Tab 几何停留在过期值，会「假通过」。弹窗用
   `show()` 而非 `exec()`（`exec()` 阻塞事件循环，脚本调不了）。
