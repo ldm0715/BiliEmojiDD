@@ -35,6 +35,7 @@ from app.components.task import run_task, task_manager
 from app.components.update_dialog import show_update_dialog
 from app.components.updater import fetch_latest_release
 from app.components.video_cache import video_cache
+from app.components.window_state import restore_window_state, save_window_state
 from app.view.download_page import DownloadPage
 from app.view.dress_page import DressPage
 from app.view.emoji_page import EmojiPage
@@ -333,8 +334,12 @@ class MainWindow(FluentWindow):
         # windowTitleChanged——设这两项即可，无需自定义标题栏
         self.setWindowIcon(app_icon())
         self.setWindowTitle("BiliEmojiDD")
-        self.resize(1100, 760)
+        # 最小尺寸要先钉，恢复出来的几何才会被它夹住（太小 / 被改坏的记录不至于
+        # 把窗口恢复成一个用不了的大小）
         self.setMinimumSize(820, 600)
+        # 上次关闭时的位置与大小（含最大化状态）；没有记录 / 记录坏掉才用默认尺寸
+        if not restore_window_state(self):
+            self.resize(1100, 760)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if task_manager.running_downloads:
@@ -359,4 +364,8 @@ class MainWindow(FluentWindow):
         # 「界面改了、文件里没改」。放在 accept 之后：用户取消关窗时输入框里的值该留着。
         self.settingPage.commit_pending_edits()
         video_cache.cleanup()  # 删掉本会话的视频临时目录
+        # 记住这次的窗口位置与大小（含最大化状态），下次启动在 initWindow 里恢复。
+        # 放在「下载进行中」那条确认之后：用户取消关窗时 event.ignore() 已经返回了，
+        # 取消关窗不该改动任何状态
+        save_window_state(self)
         event.accept()

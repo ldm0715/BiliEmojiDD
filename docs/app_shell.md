@@ -1,4 +1,4 @@
-# 应用外壳：全局字体 / 字体渲染 / 消息提示位置 / 切页无动画 / 开屏面板
+# 应用外壳：全局字体 / 字体渲染 / 消息提示位置 / 切页无动画 / 开屏面板 / 窗口几何记忆
 
 四件跨页面的「壳」层改动，都不属于任何单个功能页。
 
@@ -308,6 +308,43 @@ window.show(); splash.finish(window)
 
 ---
 
+## 七、窗口位置与大小的记忆
+
+关窗时把窗口几何存下来，下次启动原样恢复——包括**在哪块屏幕上**。双屏用户不必每次
+重新把窗口拖到惯用的那块屏、再拉到自己习惯的尺寸。
+
+| | |
+|---|---|
+| 存什么 | `window.saveGeometry()` 的 base64，一个 `ConfigItem("App", "windowGeometry", "")` |
+| 何时写 | `MainWindow.closeEvent`，`event.accept()` 前一行（`app/components/window_state.py`） |
+| 何时读 | `MainWindow.initWindow()`，`setMinimumSize` 之后 |
+
+### 为什么用 `saveGeometry()` 而不是手写 x/y/w/h
+
+那一个不透明的 blob 里连**最大化状态**、**所在屏幕**与 **DPI** 一起编码了，恢复时 Qt
+还会自己把跑到屏幕外的窗口拉回来（副屏拔掉、分辨率变小都属于这一类）。手写四个字段
+就得自己处理 `normalGeometry()`、屏幕归属与 DPI 换算——三件事都有微妙的坑，
+换来的只是配置文件里多几个看得懂的数字。这与「组件库有的组件就用组件库的」是同一条取舍。
+
+### 几个刻意的选择
+
+- **最小尺寸先钉再恢复**：`setMinimumSize(820, 600)` 必须在 `restore_window_state` 之前，
+  否则一条太小 / 被改坏的记录会把窗口恢复成用不了的大小。
+- **只挂 `closeEvent`，不做 `moveEvent` / `resizeEvent` 上的防抖落盘**：后者会在拖动窗口时
+  反复写盘，收益只是「被任务管理器强杀也能记住」。退出路径一定是 `window.close()`
+  而不是 `QApplication.quit()`，所以 `closeEvent` 一定跑得到（这也是那条硬性要求的
+  又一条理由）。
+- **「下载进行中」那条确认被取消时不写**：`event.ignore(); return` 在前面就返回了，
+  取消关窗不该改动任何状态。
+- **坏数据不崩**：`window_state.restore_window_state()` 挡住「键不是字符串 / 空串 /
+  非 ASCII」三种，剩下的交给 `restoreGeometry`——它内部校验 blob 的 magic 与窗口尺寸
+  字段，认不出来返回 `False`。最坏结果就是回到默认的 1100×760。
+
+没加设置页开关（想要「记住窗口位置」的开关键再说一声；加了要同步
+`scripts/check_setting_page.py` 里 `counts == [5, 3, 3, 2, 3]` 那条严格等值断言）。
+
+---
+
 ## 回归断言
 
 `scripts/check_splash.py` 覆盖：面板内容（图标 / 品牌名 / 版本号 / 进度文案）与居中位置、
@@ -321,3 +358,13 @@ window.show(); splash.finish(window)
 `apply_font_engine()` 的三种取值与「不覆盖外部 `QT_QPA_PLATFORM`」、
 InfoBar 挂在 `stackedWidget` 且位置在内容区右上角 / 切页后仍可见、
 切页一轮事件循环内到位且无残留动画。
+
+`scripts/check_window_state.py` 覆盖第七节那件事：没有记录时走默认尺寸、
+位置与大小的往返、**最大化状态与「最大化之前的大小」都被记住**、
+跑到屏幕外的记录被拉回可用屏幕内、坏数据（数字 / 乱码 / 非 ASCII）不崩且窗口不受影响、
+以及端到端的 `closeEvent → 再开一个窗口几何一致`。
+
+> 最大化那一条断言的是 `normalGeometry()` 而**不是** `showNormal()` 之后的 `size()`：
+> 离屏平台没有真的窗口管理器，`showNormal()` 会把 normalGeometry 丢掉、退回它自己的
+> 默认值（实测 640×480），而 blob 里那个「最大化之前的大小」在 `show()` 之后已经正确
+> 落在 `normalGeometry()` 上了。真机上的多屏 / 还原行为仍需人工确认。

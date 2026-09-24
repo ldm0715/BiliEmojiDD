@@ -94,6 +94,10 @@ class AppConfig(QConfig):
 
     # 配置结构版本，只给迁移用，界面上不出现
     schema_version = ConfigItem("App", "schema", 0)
+    # 上次关闭时的窗口几何，值是 Qt `saveGeometry()` 的 base64（见 app/components/window_state.py）。
+    # 空串 = 没记录过 → 启动时用默认尺寸。**不透明的 blob，不要手改**：认不出来时
+    # restore_window_state 会退回默认尺寸，不会崩。新键由 _ensure_persisted 自动补写
+    window_geometry = ConfigItem("App", "windowGeometry", "")
     cookie = ConfigItem("Account", "cookie", "")
     # 上次登录的账号信息（扫码登录或「验证」成功后写入），只用来把昵称头像显示在
     # 设置页上。**启动时不联网去刷**——省一次请求，也免得屏幕外脚本被拖住。
