@@ -193,6 +193,17 @@
 - 改滚动帧率即时生效无需重启：新建滚动区域天然跟随，已存在的由
   `page_scaffold.apply_scroll_fps()` 遍历 `QApplication.allWidgets()` 刷；
   `ScrollArea.scrollDelagate`（上游拼错）与 `ListBase.scrollDelegate` 两种属性名都要认。
+- **网格里一格滚轮 = 一行卡片**：`tune_scroll` 把 `WHEEL_ROWS_PER_NOTCH / _wheel_lines()`
+  写进 `SmoothScroll.stepRatio`。上游 `stepRatio = 1.5` × ItemView 的 `singleStep`
+  （**就是一行卡片的像素高**，Qt 口径）× `wheelScrollLines` 是 4.5 行 ——
+  本机 PackageGrid 实测 845 px ≈ 4.9 行，比一屏还高。`fps` / `duration` 只改帧数不改位移，
+  **改位移只认 `stepRatio`**。
+- **不要用 `verticalScrollBar().setSingleStep()` 收位移**：它的初值由 Qt 在第一次布局时按
+  item 的 `sizeHint` 算出来，绕开 `set_cards()` 自己 `addItem` 会得到完全不同的值
+  （实测 39 vs 176），而且它是「固定像素」不是行数，卡片大小一变口径就散了；
+  `stepRatio` 是纯乘数、与布局无关、赋值幂等。
+- 整页 `ScrollArea`（主页 / 设置页）的 `singleStep` 是 20px 文本行，一格 96 px 本来就是对的，
+  `stepRatio` 保持上游 1.5，**别顺手一起改**（`check_wheel_step.py` 钉住了这条）。
 - 加载环启停归网格管：`_sync_spinners(first, last)` 只对**差集**动手，建卡后从「全都在转」记账，
   `hideEvent` 全停并清账、`showEvent` 重新对齐。
 - `thumb_restart()` 必须尊重 `_spinner_wanted`（右键「重新加载」不得把视口外的卡重新点着）；

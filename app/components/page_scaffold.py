@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     HeaderCardWidget,
     IndeterminateProgressRing,
@@ -248,9 +248,28 @@ class SectionCard(HeaderCardWidget):
 # （60×200 = 12000、120×200 = 24000，都是 1000 的整数倍）。
 SCROLL_DURATION = 200
 
+# 网格里一格滚轮走过的行数。ItemView 的 `singleStep` 就是**一行的像素高**（Qt 口径），
+# 而上游 `SmoothScroll` 一格滚轮的位移是
+# `angleDelta / 120 * stepRatio * wheelScrollLines * singleStep`：
+#   - 上游 `stepRatio = 1.5`、`wheelScrollLines` 通常是 3 ⇒ 一格滚 4.5 行
+#     （本机 PackageGrid 实测 854 px ≈ 4.9 行，比一屏还高）；
+#   - 取 `stepRatio = 1 / wheelScrollLines` ⇒ 一格恰好一行，且**自适应行高**
+#     （卡片变大位移跟着变大，公式里不出现第二个常数）。
+# 只对 `QAbstractItemView` 生效；主页 / 设置页的整页 `ScrollArea`（`singleStep = 20`）
+# 保持上游口径，仍是三行文本的距离。
+WHEEL_ROWS_PER_NOTCH = 1
+
+
+def _wheel_lines() -> int:
+    """Windows「一次滚动下列行数」。系统设成「一屏」时 Qt 返回 -1，按常见的 3 兜底。"""
+    from PySide6.QtWidgets import QApplication
+
+    lines = QApplication.wheelScrollLines()
+    return lines if lines > 0 else 3
+
 
 def tune_scroll(area, duration: int = SCROLL_DURATION) -> None:
-    """把滚轮平滑的帧率 / 时长按配置设上去；重页面与网格都走这里。
+    """把滚轮平滑的帧率 / 时长 / 一格滚轮的位移按配置设上去；重页面与网格都走这里。
 
     **步数必须整除**：`stepsTotal` 是浮点数，`__smoothMove` 每帧 `-1` 后按
     `== 0` 出队。`fps * duration` 不是 1000 的整数倍时（如 duration=130 → 7.8）
@@ -261,6 +280,11 @@ def tune_scroll(area, duration: int = SCROLL_DURATION) -> None:
       - `ListWidget` / `ListBase`（网格）是 `scrollDelegate`（`list_view.py:34`）。
     实测一格滚轮（网格、150 张卡）：duration=400 时 24 帧、141 ms CPU、1820 次重绘；
     duration=200 时 12 帧、62 ms CPU、872 次重绘 —— 总位移不变，只是交付更快。
+
+    **位移口径只在这里改**：网格靠 `stepRatio` 把一格滚轮收成一行
+    （见 `WHEEL_ROWS_PER_NOTCH`），页面原样保留上游的 1.5。别改走
+    `verticalScrollBar().setSingleStep()`：那要等 Qt 算完行高才准，而 `stepRatio`
+    是纯乘数、与布局无关，赋值也是幂等的。
 
     `fps` 每次现读 `cfg.scroll_fps`，所以新造的滚动区域天然跟着最新设置走；
     已经存在的那些由 `apply_scroll_fps()` 在设置页改动时刷一遍。
@@ -273,6 +297,11 @@ def tune_scroll(area, duration: int = SCROLL_DURATION) -> None:
     if delegate is None:  # 既不是组件库 ScrollArea 也不是 ListBase，静默跳过
         return
     fps = cfg.scroll_fps.value
+    rows = (
+        WHEEL_ROWS_PER_NOTCH / _wheel_lines()
+        if isinstance(area, QAbstractItemView)
+        else None
+    )
     for scroll in (delegate.verticalSmoothScroll, delegate.horizonSmoothScroll):
         if fps * duration % 1000:
             raise ValueError(
@@ -281,6 +310,8 @@ def tune_scroll(area, duration: int = SCROLL_DURATION) -> None:
             )
         scroll.fps = fps
         scroll.duration = duration
+        if rows is not None:
+            scroll.stepRatio = rows
 
 
 def iter_scroll_areas():

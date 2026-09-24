@@ -187,6 +187,14 @@ PackageGrid 300 卡：滚动一步 9.9 → 7.5 ms，一格滚轮 203 → 62 ms�
 
 - `fps` 决定一格滚轮摊成几帧：`步骤数 = fps * duration / 1000`，`duration` 固定 200 ⇒
   60 → 12 帧、120 → 24 帧。位移不变，只是插值更密。
+- **网格里一格滚轮 = 一行卡片**，`tune_scroll` 靠 `SmoothScroll.stepRatio` 定：
+  `位移 = angleDelta * stepRatio * wheelScrollLines * singleStep / 120`，而 ItemView 的
+  `singleStep` 就是一行卡片的像素高，所以取 `stepRatio = 1 / wheelScrollLines` 正好一行。
+  上游默认 `stepRatio = 1.5`（把 120 角度放大成 180 的那一层），乘出来是 4.5 行 ——
+  实测 PackageGrid 一格 **845 px ≈ 4.9 行**，一屏半就过去了。改完 189 px = 1.10 行
+  （多出的 10% 来自上游 `acceleration` 连滚最多 ×2，长列表快速翻页仍然有用）。
+  整页 `ScrollArea` 的 `singleStep` 是 20px 文本行，一格 96 px 本来就是对的，`stepRatio`
+  保持 1.5 不动。断言见 `scripts/check_wheel_step.py`。
 - **两档都必须整除**：`60×200 = 12000`、`120×200 = 24000`，都满足
   `fps * duration % 1000 == 0`。这是硬约束 —— 不整除时 `stepsTotal` 是小数，
   `__smoothMove` 每帧 `-1` 永远减不到 0，那一格滚轮会**永久留在队列里**、
