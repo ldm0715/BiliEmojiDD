@@ -31,9 +31,6 @@ STATIC_DIR = PROJECT_ROOT / "static"
 # 编译时用 --include-data-files=pyproject.toml=pyproject.toml 一起带上。
 PYPROJECT_PATH = PROJECT_ROOT / "pyproject.toml"
 APP_ICON_PATH = STATIC_DIR / "logo.ico"
-# 主页「关于」卡里的依赖徽标
-QFLUENT_LOGO_PATH = STATIC_DIR / "qfluentwidget.png"
-PYSIDE_LOGO_PATH = STATIC_DIR / "qtforpython.png"
 # 主页展示图：由 scripts/fetch_showcase.py 一次性抓取并裁好后入库，运行时零网络请求
 SHOWCASE_DIR = STATIC_DIR / "showcase"
 SHOWCASE_MANIFEST = SHOWCASE_DIR / "manifest.json"

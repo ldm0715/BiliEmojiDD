@@ -1,9 +1,10 @@
 """屏幕外验证主页（欢迎页 + 功能入口引导）。
 
-1. 版式：大标题「主页」与 36px 页边距对齐；滚动区显式透明；
+1. 版式：大标题「主页」与 36px 页边距对齐；滚动区显式透明；不再有「快速上手 / 关于」块；
 2. 功能卡：三张卡标题正确，点击各自发出正确的 navigateRequested；
-3. 英雄卡：主按钮随 Cookie 状态换文案与去向，状态行随队列/配置刷新；
+3. 英雄卡：主按钮随 Cookie 状态换文案与去向，状态灯随配置刷新；
    状态灯五态文案与配色（纯映射 + 写入记录后真的跟着变）；
+   队列状态只在下载卡上，不与英雄卡重复；
 4. 展示图：static/showcase 的图能读出来；素材缺失时整条缩略图带降级隐藏；
 5. 响应式：宽/中/窄三档下功能卡列数为 3/2/1，且整页最小宽度不顶破最小窗口；
 6. 滚轮能滚到底并停住；
@@ -121,6 +122,12 @@ title_x = page.titleLabel.mapTo(page, QPoint(0, 0)).x()
 check(title_x == PAGE_MARGIN, f"大标题与页边距对齐（x={title_x}，应为 {PAGE_MARGIN}）")
 qss = page.scrollArea.styleSheet()
 check("background:transparent" in qss, "滚动区显式透明（暗色下不露 Base 色块）")
+# 「快速上手」的跳转目标与三张入口卡完全重复、「关于」是设置页的职责，两块都已整卡删除；
+# 它们各自的跳转目标也不该在英雄卡上复活
+for gone in ("quickStartCard", "aboutCard"):
+    check(not hasattr(page, gone), f"「{gone}」已整块删除（不再往主页堆信息）")
+for gone in ("queueLabel", "dirLabel", "openDirBtn"):
+    check(not hasattr(page.heroCard, gone), f"英雄卡不再重复下载卡的「{gone}」")
 
 # ---------------------------------------------------------------- 2. 功能卡跳转
 print("\n[功能入口卡]")
@@ -213,8 +220,11 @@ settle()
 
 download_queue.add(_Pkg(1))
 settle()
-check("1 项" in page.heroCard.queueLabel.text(), "英雄卡队列计数随入队刷新")
 check("1 项" in page.queueCountLabel.text(), "下载卡队列计数随入队刷新")
+check(
+    cfg.download_dir.value in page.queueDirLabel.text(),
+    "下载目录只在下载卡上出现一次（英雄卡不再重复）",
+)
 
 # ---- 队列预览：实时显示前 4 项封面，不足 4 项就少显示 ----
 check(page.queuePreview.visible_count() == 1, "队列 1 项时只显示 1 张封面")
@@ -228,8 +238,7 @@ download_queue.clear()
 settle()
 check("0 项" in page.queueCountLabel.text(), "清空队列后计数归零")
 check(not page.queuePreview.isVisible(), "队列为空时预览条整体隐藏")
-check(cfg.download_dir.value in page.heroCard.dirLabel.text(), "英雄卡显示下载目录")
-check(page.heroCard.dirLabel.wordWrap(), "下载目录 Label 换行（否则顶高整页最小宽度）")
+check(page.queueDirLabel.wordWrap(), "下载目录 Label 换行（否则顶高整页最小宽度）")
 
 # ---------------------------------------------------------------- 4. 展示图
 print("\n[展示图]")
@@ -276,9 +285,14 @@ for width, expect in ((1400, 3), (900, 2), (620, 1)):
         page.feature_columns() == expect,
         f"宽 {width} → 功能卡 {expect} 列（得到 {page.feature_columns()}）",
     )
-check(page.bottom_columns() == 1, "窄窗口时快速上手 / 关于收敛成单列")
 min_w = page.minimumSizeHint().width()
 check(min_w <= 760, f"整页最小宽度不顶破最小窗口（{min_w} <= 760）")
+
+# 瘦身的直接目的：默认窗口尺寸（MainWindow 是 1100×760）下整页一屏放得下，不用滚
+page.resize(1100, 760)
+settle()
+scrolled = page.scrollArea.verticalScrollBar().maximum()
+check(scrolled == 0, f"默认窗口尺寸下一屏放得下（可滚范围 {scrolled}）")
 
 # ---------------------------------------------------------------- 6. 滚到底
 print("\n[滚轮滚到底]")

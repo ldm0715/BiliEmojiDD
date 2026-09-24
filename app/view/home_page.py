@@ -1,14 +1,17 @@
 """主页：应用介绍 + 功能入口引导（启动默认页）。
 
 启动落在表情包页的「按 ID 查询」标签时整页是空的，既不好看也没告诉用户能做什么。
-本页用 Fluent 卡片版式回答三个问题：这是什么、我能做什么、我该从哪一步开始。
+本页用 Fluent 卡片版式回答两个问题：**这是什么**、**我该去哪**。
 
-四个模块，自上而下：
+两块内容，自上而下：
 
-1. `_HeroCard`   —— logo / 应用名 / 版本 / 一句话简介 + 状态概览 + 主按钮（随 Cookie 状态变）
-2. `_FeatureCard` ×3 —— 表情包 / 收藏集 / 下载，整卡可点，前两张带 `static/showcase` 本地展示图
-3. `_QuickStartCard` —— 三步上手，每步一个跳转按钮
-4. `_AboutCard`  —— 版本 / SDK / 链接 / 配置目录 / 免责声明
+1. `_HeroCard`   —— logo / 应用名 / 版本 / 一句话简介 / Cookie 状态灯 / 主按钮
+2. `_FeatureCard` ×3 —— 表情包 / 收藏集 / 下载，整卡可点，前两张带 `static/showcase`
+   本地展示图，下载卡带队列预览
+
+**不重复别处已有的信息**：队列数量与下载目录只在下载卡上出现（那里才是它们的语境），
+版本号只在欢迎卡上出现。这里曾经还挂着「快速上手」与「关于」两块——前者的跳转目标与
+三张入口卡完全重复，后者是设置页「关于」组的职责——都已整块删除。
 
 **本页不直接发请求**：展示图来自 `static/showcase/`（由 `scripts/fetch_showcase.py` 一次性
 抓好入库），状态数据是本地配置 + 内存队列 + Cookie 有效性记录。唯一的联网动作是
@@ -17,8 +20,6 @@
 导航一律走信号（`navigateRequested`）交给 `MainWindow` 处理，本页不反向引用主窗口。
 """
 from __future__ import annotations
-
-from pathlib import Path
 
 from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QBrush, QImage, QPainter
@@ -35,7 +36,6 @@ from qfluentwidgets import (
     CaptionLabel,
     CardWidget,
     FluentIcon,
-    HyperlinkButton,
     IconWidget,
     ImageLabel,
     PrimaryPushButton,
@@ -47,24 +47,16 @@ from qfluentwidgets import (
     TransparentPushButton,
 )
 
-from app.common.config import APP_CONFIG_DIR, APP_VERSION, cfg
-from app.common.resource import (
-    PYSIDE_LOGO_PATH,
-    QFLUENT_LOGO_PATH,
-    app_icon,
-    showcase_images,
-    showcase_names,
-)
+from app.common.config import APP_VERSION, cfg
+from app.common.resource import app_icon, showcase_images, showcase_names
 from app.common.signal_bus import signal_bus
 from app.common.theme import DANGER_TEXT, ORANGE_TEXT, SECONDARY_TEXT, SUCCESS_TEXT
 from app.components import cookie_status
 from app.components.download_queue import download_queue, item_cover_url
-from app.components.download_runner import open_in_explorer
 from app.components.page_scaffold import (
     PAGE_BOTTOM,
     PAGE_MARGIN,
     SECTION_SPACING,
-    SectionCard,
     page_title,
     title_row,
     tune_scroll,
@@ -83,23 +75,9 @@ _EMOJI_THUMB = 52  # 表情展示图边长（方形）
 _COLL_THUMB_W = 54  # 收藏集封面宽（3:4 竖版）
 _STRIP_SPACING = 6
 _CARD_MIN_W = 300  # 功能卡最小宽度，据此算响应式列数
-_BOTTOM_MIN_W = 320  # 快速上手 / 关于卡的最小宽度
-_DEP_LOGO_H = 22  # 「关于」卡里依赖徽标的高度
 _QUEUE_THUMB = 44  # 下载卡队列预览封面边长
-_PROJECT_URL = "https://pypi.org/project/biliemoji/"
 
 _INTRO = "B 站表情包 / 收藏集（装扮）下载器：查询、预览、批量下载，一站搞定。"
-_DISCLAIMER = "所有接口来自 B 站公开 API，可能随官方更新失效；仅供学习交流，请勿滥用。"
-
-
-def _sdk_version() -> str:
-    """biliemoji 版本。它是正常安装的包（本应用 package=false 才拿不到版本）。"""
-    try:
-        from importlib.metadata import version
-
-        return version("biliemoji")
-    except Exception:  # noqa: BLE001 拿不到版本不该影响主页
-        return "?"
 
 
 def _round_corners(image: QImage, radius: float) -> QImage:
@@ -342,7 +320,11 @@ def cookie_light(state: str) -> tuple[str, tuple[str, str]]:
 
 
 class _HeroCard(SimpleCardWidget):
-    """顶部欢迎卡：品牌 + 简介 + 状态概览 + 主按钮。"""
+    """顶部欢迎卡：品牌 + 简介 + Cookie 状态灯 + 主按钮。
+
+    **只回答「这是什么」与「现在能不能用」**：队列数量与下载目录不在这里出现，
+    它们是下载卡的语境（两处各写一份时，用户看到的是同一句话重复两遍）。
+    """
 
     navigate = Signal(str)
 
@@ -375,193 +357,40 @@ class _HeroCard(SimpleCardWidget):
         self.introLabel.setWordWrap(True)
         box.addWidget(self.introLabel)
 
-        status_row = QHBoxLayout()
-        status_row.setSpacing(16)
+        # 五态状态灯，文案与配色由 cookie_light 这个纯函数给（见下）
         self.cookieLabel = CaptionLabel("", self)
-        self.queueLabel = CaptionLabel("", self)
-        self.queueLabel.setTextColor(*SECONDARY_TEXT)
-        status_row.addWidget(self.cookieLabel)
-        status_row.addWidget(self.queueLabel)
-        status_row.addStretch(1)
-        box.addLayout(status_row)
-
-        # 路径可能很长：不换行的话最小宽度就是整串路径，整页缩不到 820px
-        self.dirLabel = CaptionLabel("", self)
-        self.dirLabel.setTextColor(*SECONDARY_TEXT)
-        self.dirLabel.setWordWrap(True)
-        box.addWidget(self.dirLabel)
+        box.addWidget(self.cookieLabel)
         layout.addLayout(box, 1)
 
         side = QVBoxLayout()
         side.setContentsMargins(0, 0, 0, 0)
         side.setSpacing(8)
         self.primaryBtn = PrimaryPushButton("开始使用", self)
-        self.openDirBtn = TransparentPushButton(FluentIcon.FOLDER, "打开下载文件夹", self)
         side.addWidget(self.primaryBtn)
-        side.addWidget(self.openDirBtn)
         side.addStretch(1)
         layout.addLayout(side, 0)
 
         self.primaryBtn.clicked.connect(self._on_primary)
-        self.openDirBtn.clicked.connect(self._on_open_dir)
         signal_bus.configChanged.connect(self.refresh)
         # cookieStateChanged 带一个 str 载荷，不能直接接无参的 refresh()（TypeError）
         signal_bus.cookieStateChanged.connect(self._on_cookie_state)
-        download_queue.changed.connect(self.refresh)
         self.refresh()
 
     def _on_cookie_state(self, _state: str) -> None:
         self.refresh()
 
     def refresh(self) -> None:
-        has_cookie = bool(cfg.cookie.value.strip())
         text, color = cookie_light(cookie_status.current_state())
         self.cookieLabel.setText(text)
         self.cookieLabel.setTextColor(*color)
-        self.queueLabel.setText(f"队列 {len(download_queue)} 项")
-        self.dirLabel.setText(f"下载目录: {cfg.download_dir.value}")
         # 按钮只看「填没填」——状态灯才反映「有没有用」（失效时仍给「开始使用」，
         # 让用户自己去表情包页撞见报错，而不是被挡在主页）
-        self.primaryBtn.setText("开始使用" if has_cookie else "填写 Cookie")
+        self.primaryBtn.setText("开始使用" if cfg.cookie.value.strip() else "填写 Cookie")
 
     def _on_primary(self) -> None:
         self.navigate.emit(
             NAV_EMOJI if cfg.cookie.value.strip() else NAV_SETTING
         )
-
-    def _on_open_dir(self) -> None:
-        path = Path(cfg.download_dir.value)
-        path.mkdir(parents=True, exist_ok=True)
-        open_in_explorer(path, self.window())
-
-
-class _QuickStartCard(SectionCard):
-    """快速上手三步，每步右侧一个跳转按钮。"""
-
-    navigate = Signal(str)
-
-    _STEPS = (
-        ("1", "填写 Cookie", "全部表情包与收藏集下载需要登录，Cookie 只存在本机", "去设置", NAV_SETTING),
-        ("2", "查询 / 搜索", "按 ID 查表情包，或用关键词搜收藏集，点卡片看详情", "去查询", NAV_EMOJI),
-        ("3", "批量下载", "勾选「多选」加入队列，在下载页一键下载全部", "去下载", NAV_DOWNLOAD),
-    )
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("快速上手", parent)
-        # HeaderCardWidget.viewLayout 是 QHBoxLayout，多行内容先包一个容器
-        holder = QWidget(self.view)
-        box = QVBoxLayout(holder)
-        box.setContentsMargins(0, 0, 0, 0)
-        box.setSpacing(10)
-        for number, title, desc, action, route in self._STEPS:
-            box.addWidget(self._build_step(number, title, desc, action, route, holder))
-        self.add_widget(holder)
-
-    def _build_step(
-        self, number: str, title: str, desc: str, action: str, route: str, parent
-    ) -> QWidget:
-        row = QWidget(parent)
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
-
-        index = StrongBodyLabel(number, row)
-        index.setFixedWidth(16)
-        index.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(index, 0, Qt.AlignmentFlag.AlignTop)
-
-        text = QVBoxLayout()
-        text.setContentsMargins(0, 0, 0, 0)
-        text.setSpacing(2)
-        name = StrongBodyLabel(title, row)
-        name.setWordWrap(True)
-        hint = CaptionLabel(desc, row)
-        hint.setTextColor(*SECONDARY_TEXT)
-        hint.setWordWrap(True)
-        text.addWidget(name)
-        text.addWidget(hint)
-        layout.addLayout(text, 1)
-
-        button = TransparentPushButton(action, row)
-        button.clicked.connect(lambda _=False, r=route: self.navigate.emit(r))
-        layout.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
-        return row
-
-
-class _AboutCard(SectionCard):
-    """关于：版本 / 依赖 / 链接 / 配置目录 / 免责声明。"""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("关于", parent)
-        holder = QWidget(self.view)
-        box = QVBoxLayout(holder)
-        box.setContentsMargins(0, 0, 0, 0)
-        box.setSpacing(8)
-
-        # 应用名 + 版本胶囊（与英雄卡 / 设置页身份行同一套组件）
-        name_row = QHBoxLayout()
-        name_row.setContentsMargins(0, 0, 0, 0)
-        name_row.setSpacing(8)
-        self.nameLabel = StrongBodyLabel("BiliEmojiDD", holder)
-        self.versionLabel = version_badge(APP_VERSION, holder)
-        name_row.addWidget(self.nameLabel, 0, Qt.AlignmentFlag.AlignVCenter)
-        name_row.addWidget(self.versionLabel, 0, Qt.AlignmentFlag.AlignVCenter)
-        name_row.addStretch(1)
-        box.addLayout(name_row)
-
-        self.stackLabel = CaptionLabel(f"biliemoji {_sdk_version()} 提供接口能力", holder)
-        self.stackLabel.setTextColor(*SECONDARY_TEXT)
-        self.stackLabel.setWordWrap(True)
-        box.addWidget(self.stackLabel)
-
-        # 依赖徽标：PySide6（Qt for Python）+ QFluentWidgets，图在 static/
-        logo_row = QHBoxLayout()
-        logo_row.setContentsMargins(0, 2, 0, 2)
-        logo_row.setSpacing(12)
-        self.stackLogos: list[_FlatImageLabel] = []
-        for path, tip in (
-            (PYSIDE_LOGO_PATH, "PySide6 (Qt for Python)"),
-            (QFLUENT_LOGO_PATH, "PyQt-Fluent-Widgets"),
-        ):
-            source = QImage(str(path)) if path.is_file() else QImage()
-            if source.isNull():
-                continue
-            logo = _FlatImageLabel(holder)
-            # 按原图比例定宽，再预缩放到 size*dpr（见 _fit_image）；徽标不加圆角
-            width = max(1, round(_DEP_LOGO_H * source.width() / source.height()))
-            _fit_image(logo, source, width, _DEP_LOGO_H)
-            logo.setToolTip(tip)
-            logo_row.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
-            self.stackLogos.append(logo)
-        logo_row.addStretch(1)
-        box.addLayout(logo_row)
-
-        self.configLabel = CaptionLabel(f"配置目录: {APP_CONFIG_DIR}", holder)
-        self.configLabel.setTextColor(*SECONDARY_TEXT)
-        self.configLabel.setWordWrap(True)
-        box.addWidget(self.configLabel)
-
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
-        self.linkBtn = HyperlinkButton(_PROJECT_URL, "biliemoji SDK", holder, FluentIcon.LINK)
-        self.configBtn = TransparentPushButton(FluentIcon.FOLDER, "打开配置目录", holder)
-        self.configBtn.clicked.connect(self._on_open_config)
-        row.addWidget(self.linkBtn)
-        row.addWidget(self.configBtn)
-        row.addStretch(1)
-        box.addLayout(row)
-
-        self.disclaimerLabel = CaptionLabel(_DISCLAIMER, holder)
-        self.disclaimerLabel.setTextColor(*SECONDARY_TEXT)
-        self.disclaimerLabel.setWordWrap(True)
-        box.addWidget(self.disclaimerLabel)
-        box.addStretch(1)
-        self.add_widget(holder)
-
-    def _on_open_config(self) -> None:
-        APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        open_in_explorer(APP_CONFIG_DIR, self.window())
 
 
 class _QueuePreviewStrip(QWidget):
@@ -646,7 +475,6 @@ class HomePage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._feature_cols = 0
-        self._bottom_cols = 0
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -687,14 +515,6 @@ class HomePage(QWidget):
         self.featureGrid.setSpacing(SECTION_SPACING)
         self.featureCards = self._build_feature_cards()
         content.addLayout(self.featureGrid)
-
-        self.bottomGrid = QGridLayout()
-        self.bottomGrid.setContentsMargins(0, 0, 0, 0)
-        self.bottomGrid.setSpacing(SECTION_SPACING)
-        self.quickStartCard = _QuickStartCard(self.scrollWidget)
-        self.quickStartCard.navigate.connect(self.navigateRequested.emit)
-        self.aboutCard = _AboutCard(self.scrollWidget)
-        content.addLayout(self.bottomGrid)
         content.addStretch(1)
 
         self._reflow(force=True)
@@ -774,9 +594,6 @@ class HomePage(QWidget):
     def feature_columns(self) -> int:
         return self._feature_cols
 
-    def bottom_columns(self) -> int:
-        return self._bottom_cols
-
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._reflow()
@@ -786,22 +603,17 @@ class HomePage(QWidget):
         return max(1, min(maximum, (available + SECTION_SPACING) // step))
 
     def _reflow(self, *, force: bool = False) -> None:
-        """按可用宽度重排卡片列数。
+        """按可用宽度重排功能卡列数。
 
         列数没变直接 return——只有跨过阈值才动布局，避免拖拽窗口时反复重排
         （「在 resizeEvent 里按比例改几何」那套在视频播放器上踩过明显卡顿）。
         """
         available = max(0, self.width() - PAGE_MARGIN * 2)
         features = self._columns(available, _CARD_MIN_W, 3)
-        bottom = self._columns(available, _BOTTOM_MIN_W, 2)
-        if not force and features == self._feature_cols and bottom == self._bottom_cols:
+        if not force and features == self._feature_cols:
             return
         self._feature_cols = features
-        self._bottom_cols = bottom
         self._fill_grid(self.featureGrid, self.featureCards, features)
-        self._fill_grid(
-            self.bottomGrid, [self.quickStartCard, self.aboutCard], bottom
-        )
 
     @staticmethod
     def _fill_grid(grid: QGridLayout, widgets: list[QWidget], columns: int) -> None:

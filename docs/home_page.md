@@ -7,23 +7,47 @@
 
 > 后来表情包页的默认标签换成了有内容的「全部表情包」（见
 > [cookie_status.md](cookie_status.md) 第六节），但主页作为启动页的引导作用没变：
-> 侧栏第一项、状态概览、三步上手都还在。
+> 侧栏第一项、Cookie 状态灯、功能入口卡都还在。
 
 于是在侧栏最上方（表情包之上）新增 **主页**，作为启动默认页。四个设计决定：
 
 | 决定 | 选择 | 理由 |
 |---|---|---|
-| 版式 | 英雄卡 + 三张带图功能卡 + 快速上手 / 关于 | 信息密度与引导性最好 |
+| 版式 | 英雄卡 + 三张带图功能卡 | 信息密度与引导性最好 |
 | 展示图 | 一次性抓好裁好存进 `static/showcase/` 并入库 | 主页**不直接发请求**（唯一的联网动作是进页面时按信任期做的 Cookie 检测），离线可用、无 Cookie 依赖、断言脚本可直接跑 |
 | 组件 | 全部取自 qfluentwidgets | 主题切换自动跟随，不写自定义 QSS |
 | 导航 | 主页只发信号，`MainWindow` 负责 `switchTo` | 主页不反向引用主窗口 |
+
+### 只回答两个问题
+
+主页只回答「**这是什么**」与「**我该去哪**」，其余信息不在这里重复出现：
+
+| 信息 | 只在何处出现 |
+|---|---|
+| 版本号 | 主页欢迎卡（设置页身份行是另一处） |
+| 队列数量、下载目录 | 下载卡（那里才是它们的语境） |
+| 协议、依赖、仓库链接、配置目录 | 设置页「关于」组 |
+
+这条规矩来自 2026-09-24 的**瘦身**。此前主页是历次功能迭代叠出来的，从没整体设计过：
+5 块卡片、9 个可点目标，其中三处是重复信息（版本号 ×2、队列数 ×2、下载目录 ×2），
+另有两块整卡是别处的职责：
+
+- **「快速上手」三步** —— 三个跳转按钮（去设置 / 去查询 / 去下载）与三张入口卡完全重复
+- **「关于」** —— 依赖徽标、配置目录、免责声明，与设置页「关于」组职责重叠
+
+两块整卡删除后剩 4 块、4 个可点目标。**默认窗口尺寸（1100×760）下一屏放得下**，
+`check_home_page.py` 直接断言 `scrollArea.verticalScrollBar().maximum() == 0`。
+同机基准（1100×820，40 帧中位数）整页单帧重绘 **11.40 ms → 5.36 ms**。
+
+一并删掉两个只被「关于」卡引用的依赖徽标（`static/qfluentwidget.png`、
+`static/qtforpython.png`）与 `app/common/resource.py` 里对应的两个路径常量。
 
 ## 二、新增 / 修改文件
 
 | 文件 | 内容 |
 |---|---|
-| `app/view/home_page.py` | 新增。页面主体与四个私有卡片类 |
-| `app/common/resource.py` | 加 `SHOWCASE_DIR` / `showcase_images()` / `showcase_names()` 与两个依赖徽标路径 |
+| `app/view/home_page.py` | 新增。页面主体、两张卡片类、两条图片条 |
+| `app/common/resource.py` | 加 `SHOWCASE_DIR` / `showcase_images()` / `showcase_names()` |
 | `app/components/download_queue.py` | 加 `item_cover_url(item)`，与队列卡共用取图口径 |
 | `app/components/widgets.py` | `QueueList._cover_url` 改为复用 `item_cover_url` |
 | `app/MainWindow.py` | 主页放第一位 + `_navigate` 接线 |
@@ -38,26 +62,25 @@
 ```
 主页                                     ← page_title + title_row（36px 页边距，与其余四页一致）
 ┌───────────────────────────────────────┐
-│ [logo] BiliEmojiDD  v0.1.0  [开始使用] │  _HeroCard
-│ 一句话简介          [打开下载文件夹]     │  · 主按钮只看 Cookie 有没有填
-│ ● Cookie 有效 · 队列 3 项              │  · 状态灯反映「能不能用」（见 cookie_status.md）
+│ [logo] BiliEmojiDD  v0.1.4 [开始使用]  │  _HeroCard
+│ 一句话简介                              │  · 主按钮只看 Cookie 有没有填
+│ ● Cookie 有效                          │  · 状态灯反映「能不能用」（见 cookie_status.md）
 └───────────────────────────────────────┘
 ┌─────────┐ ┌─────────┐ ┌─────────┐        _FeatureCard ×3，响应式 3 / 2 / 1 列
 │ 表情包   │ │ 收藏集   │ │ 下载     │
 │ ▣▣▣▣    │ │ ▮▮▮▮    │ │ 队列封面 │      ← 前两张读 static/showcase，第三张实时读队列
 │   进入 → │ │   进入 → │ │   进入 → │
 └─────────┘ └─────────┘ └─────────┘
-┌────────────┐ ┌────────────────┐          SectionCard，宽窗两列 / 窄窗一列
-│ 快速上手 3 步│ │ 关于（含依赖徽标）│
-└────────────┘ └────────────────┘
 ```
 
-用到的组件一律来自组件库：`SimpleCardWidget` / `CardWidget` / `HeaderCardWidget`（经
-`SectionCard`）/ `ScrollArea` / `ImageLabel`（经 `_FlatImageLabel`）/ `IconWidget` /
-`PrimaryPushButton` / `TransparentPushButton` / `HyperlinkButton` /
-`TitleLabel` `SubtitleLabel` `StrongBodyLabel` `BodyLabel` `CaptionLabel`。
-原生 Qt 只出现在布局容器（`QWidget` + `QVBoxLayout` / `QHBoxLayout` / `QGridLayout`），
-与其余四页的写法一致。
+用到的组件一律来自组件库：`SimpleCardWidget` / `CardWidget` / `ScrollArea` /
+`ImageLabel`（经 `_FlatImageLabel`）/ `IconWidget` / `PrimaryPushButton` /
+`TransparentPushButton` / `TitleLabel` `SubtitleLabel` `StrongBodyLabel` `BodyLabel`
+`CaptionLabel`。原生 Qt 只出现在布局容器（`QWidget` + `QVBoxLayout` / `QHBoxLayout` /
+`QGridLayout`），与其余四页的写法一致。
+
+三张功能卡整卡可点（`CardWidget.clicked` 是无参信号），卡内「进入」按钮只是视觉指引，
+点它与点整卡等效。
 
 ### 队列预览（`_QueuePreviewStrip`）
 
@@ -66,14 +89,13 @@
 取图口径统一在 `download_queue.item_cover_url()`，`QueueList` 也改为复用它，
 保证主页预览与下载页队列卡显示同一张图。
 
-### 曾经有过的「最近搜索」卡（已移除）
+### 曾经有过、现已移除的块
 
-初版在底部放过一张 `_RecentSearchCard`：读三个 namespace 的 `SearchHistory` 做成胶囊，
-点一下带关键词跳到对应页搜索。**后来按需求整卡删掉**——搜索历史功能本身没动，
+底部的两块整卡（「快速上手」「关于」）在 2026-09-24 瘦身时按需求删掉，理由见第一节。
+更早还放过一张 `_RecentSearchCard`：读三个 namespace 的 `SearchHistory` 做成胶囊，
+点一下带关键词跳到对应页搜索；**后来也整卡删掉**——搜索历史功能本身没动，
 两个搜索框上的浮层面板（`SearchHistoryPanel`）照常工作，见 `search_and_cache.md`。
 
-一并删掉的还有 `_FlowHolder`（`FlowLayout` 的 heightForWidth 容器）与
-`HomePage.searchRequested` / `MainWindow._search_from_home`。
 **保留** `EmojiPage.query_package_id` / `filter_packages` 与 `DressPage.search_keyword`
 这三个公开入口——它们是页面自己的 API，目前没有调用方。
 
@@ -84,8 +106,6 @@ static/showcase/
   emoji/01.png … 08.png        正方形居中裁剪，128px，保留透明通道
   collection/01.jpg … 06.jpg   3:4 居中裁剪，宽 144，JPEG q85
   manifest.json                {"emoji":[{file,name,package_id}], "collection":[{file,name}]}
-static/qfluentwidget.png       「关于」卡的依赖徽标
-static/qtforpython.png
 ```
 
 `scripts/fetch_showcase.py` 生成，只在需要更新素材时手工跑一次：
@@ -113,7 +133,7 @@ path = QPainterPath(); path.arcTo(...)  ×4                          # ② 组�
 painter.setRenderHints(QPainter.Antialiasing); painter.setClipPath(path)  # ③ 抗锯齿裁剪
 ```
 
-主页一屏 20 个 `ImageLabel`（展示图 ×2 条、队列封面 ×4、依赖徽标 ×2），
+主页一屏 18 个 `ImageLabel`（展示图两条各 8 / 6 张、队列封面 4 张），
 **滚动时每帧全跑一遍**。其他页面的卡片走 `QPushButton.setIcon`，缩放只做一次，
 所以没有这个问题。
 
@@ -129,13 +149,13 @@ painter.setRenderHints(QPainter.Antialiasing); painter.setClipPath(path)  # ③ 
 
 同机 A/B（`scripts/bench_home_paint.py --legacy` vs 默认，1100×820，40 帧中位数）：
 
-| | 改动前 | 改动后 |
+| | 上游画法 | 扁平化 |
 |---|---|---|
-| 单个 `ImageLabel` | 0.10–0.14 ms | **0.01 ms** |
-| 一条 `_ShowcaseStrip` | 0.62–0.82 ms | **0.04 ms** |
-| 整页 | 11.4–11.9 ms | 10.0–11.8 ms |
+| 单个 `ImageLabel` | 0.12 ms | **0.01 ms** |
+| 一条 `_ShowcaseStrip` | 0.63 ms | **0.04 ms** |
+| 整页 | 6.71 ms | **5.36 ms** |
 
-**整页只降了 1ms 出头**——20 张图都很小（52/44/22 px），合计只占整页的一成多；
+**整页只降 1ms 出头**——18 张图都很小（52 / 44 / 54×72 px），合计只占整页的一成多；
 真正让滚动变顺的是下面第 5 条。列在这里是因为这一项零风险且可复现。
 
 非方图要先裁到目标比例（`_cover_square` / 抓取脚本），否则尺寸对不上，缩放照样每帧发生。
@@ -168,7 +188,7 @@ resize 自激。
 
 ### 4. 响应式改成离散列数切换
 
-功能卡与底部两卡的列数在 `resizeEvent → _reflow()` 里算，**列数没变直接 return**。
+功能卡的列数在 `resizeEvent → _reflow()` 里算，**列数没变直接 return**。
 这是离散的重排，不是「在 resizeEvent 里写几何约束做按比例自适应」——后者在拖拽窗口时
 每帧要跑好几轮「改约束 → 重排 → 又一次 resize」（视频播放器踩过，见 `collection_video.md`）。
 展示图的 `_fit()` 同理，只做 `setVisible` 增减。
@@ -182,9 +202,10 @@ self.stepsTotal = self.fps * self.duration / 1000    # 60 * 400/1000 = 24
 self.smoothMoveTimer.start(int(1000 / self.fps))     # 16ms 一跳
 ```
 
-**一格滚轮 = 24 次重绘，摊在 400ms 里**。主页单帧重绘 ~11ms，于是一格滚轮要交付
-`11 × 24 ≈ 270ms` 的绘制工作量，几乎把 400ms 填满；定时器每 16ms 就要一帧，而一帧要
-11ms，中间还有布局与事件——赶不上就丢帧，主观就是**滚一下走不动、发涩**。
+**一格滚轮 = 24 次重绘，摊在 400ms 里**。主页单帧重绘 ~11ms（瘦身前），
+于是一格滚轮要交付 `11 × 24 ≈ 270ms` 的绘制工作量，几乎把 400ms 填满；
+定时器每 16ms 就要一帧，而一帧要 11ms，中间还有布局与事件——赶不上就丢帧，
+主观就是**滚一下走不动、发涩**。
 
 改法在 `page_scaffold.tune_scroll()`：把本页（与设置页）的 `duration` 调到 **200ms**，
 步数 24 → 12。**滚动总距离不变**——`__subDelta` 的插值对所有步求和恒等于 `delta`，
@@ -195,6 +216,9 @@ self.smoothMoveTimer.start(int(1000 / self.fps))     # 16ms 一跳
 | 一格滚轮的帧数 | 21–24 | 10–12 |
 | 一格滚轮耗时 | 396 ms | 194 ms |
 | 一格滚轮的绘制总量 | ~270 ms | ~120 ms |
+
+瘦身把单帧降到 5.36ms 之后，这一行进一步降到 `12 × 5.36 ≈ 64 ms`——**离 200ms 的交付
+窗口富余得多了**，本页现在只有在窗口被拉得很高、一屏塞满卡片时才会接近预算。
 
 **步数必须整除**（`tune_scroll` 会 `raise ValueError` 挡住）。曾经试过 160ms，结果更糟：
 
@@ -213,7 +237,6 @@ while self.stepsLeftQueue and self.stepsLeftQueue[0][1] == 0:    # 精确等于 
 
 - `CardWidget.clicked` 是**无参**信号（`Signal()`），整卡可点用它即可，不必自造。
 - 页面里的 `QScrollArea` 必须显式透明，否则暗色下露出 palette 的 Base 色块（同设置页）。
-- `HeaderCardWidget.viewLayout` 是 `QHBoxLayout`，多行内容要先包一个容器再 `add_widget()`。
 - `FluentWindowBase.addSubInterface` 在 `stackedWidget.count() == 1` 时自动
   `setCurrentItem` + `setDefaultRouteKey`，所以**主页放第一位就是启动页**，无需额外 `switchTo`。
 - 抓取脚本要过滤非 http 的 `emote.url`：纯颜文字包（如 #4）的 `url` 字段是颜文字本身。
@@ -224,12 +247,13 @@ while self.stepsLeftQueue and self.stepsLeftQueue[0][1] == 0:    # 精确等于 
 QT_QPA_PLATFORM=offscreen PYTHONIOENCODING=utf-8 uv run python scripts/check_home_page.py
 QT_QPA_PLATFORM=offscreen PYTHONIOENCODING=utf-8 uv run python scripts/check_cookie_status.py  # 状态灯状态机
 QT_QPA_PLATFORM=offscreen uv run python scripts/bench_home_paint.py            # 单帧重绘基准
-QT_QPA_PLATFORM=offscreen uv run python scripts/bench_home_paint.py --legacy   # 改动前的画法，做 A/B
+QT_QPA_PLATFORM=offscreen uv run python scripts/bench_home_paint.py --legacy   # 上游画法，做 A/B
 QT_QPA_PLATFORM=offscreen uv run python scripts/screenshot_pages.py   # 生成 home_page_{light,dark}.png
 ```
 
-`check_home_page.py` 覆盖：版式与页边距、三张功能卡的点击路由、英雄卡随 Cookie/队列刷新、
-**状态灯五态文案与配色**（含写入记录后真的变色）、队列预览张数与 `+N`、
+`check_home_page.py` 覆盖：版式与页边距、**「快速上手 / 关于」与英雄卡三处重复字段确实
+不存在**、三张功能卡的点击路由、英雄卡随 Cookie 刷新、**状态灯五态文案与配色**
+（含写入记录后真的变色）、队列预览张数与 `+N`、**默认窗口下一屏放得下**、
 展示图能读出来 + 素材缺失时的降级、响应式列数 3/2/1 与整页最小宽度、
 **滚轮能滚到底并停住**、表情包页标签顺序与目标页公开入口（用 monkeypatch 拦掉
 `run_task`，脚本不联网）、**滚动性能前提**（图全走 `_FlatImageLabel`、预处理图恰好

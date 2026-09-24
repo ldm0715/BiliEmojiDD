@@ -109,8 +109,6 @@ bench("英雄卡 _HeroCard", page.heroCard)
 bench("功能卡 表情包", page.emojiCard)
 bench("功能卡 下载", page.downloadCard)
 bench("展示图带 _ShowcaseStrip", page.emojiStrip)
-bench("快速上手卡", page.quickStartCard)
-bench("关于卡", page.aboutCard)
 if page.emojiStrip.count():
     bench("单个 ImageLabel", page.emojiStrip._labels[0])
 

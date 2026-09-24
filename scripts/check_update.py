@@ -575,7 +575,6 @@ settle()
 badges = {
     "设置页身份行": SettingPage().versionLabel,
     "主页英雄卡": home.heroCard.versionLabel,
-    "主页关于卡": home.aboutCard.versionLabel,
 }
 for where, badge in badges.items():
     check(isinstance(badge, InfoBadge), f"{where}的版本号是胶囊（InfoBadge，实际 {type(badge).__name__}）")
